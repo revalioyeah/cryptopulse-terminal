@@ -71,6 +71,55 @@ export const COIN_META_MAP: Record<string, CoinMetadata> = Object.fromEntries(
   CURATED_COINS.map((c) => [c.symbol, c]),
 );
 
+const EXTRA_SECTOR_MAP: Record<string, SectorName> = {
+  // Layer 1
+  TRX: 'Layer 1', LTC: 'Layer 1', BCH: 'Layer 1', DOT: 'Layer 1', XLM: 'Layer 1',
+  HBAR: 'Layer 1', ATOM: 'Layer 1', ALGO: 'Layer 1', ICP: 'Layer 1', FIL: 'Layer 1',
+  VET: 'Layer 1', ETC: 'Layer 1', ZEC: 'Layer 1', EGLD: 'Layer 1', FTM: 'Layer 1',
+  S: 'Layer 1', KAVA: 'Layer 1', NEO: 'Layer 1', EOS: 'Layer 1', XTZ: 'Layer 1',
+  THETA: 'Layer 1', MINA: 'Layer 1', FLOW: 'Layer 1', IOTA: 'Layer 1', QTUM: 'Layer 1',
+  TIA: 'Layer 1', DYM: 'Layer 1', SAGA: 'Layer 1', BERA: 'Layer 1', MOVE: 'Layer 1',
+  KAIA: 'Layer 1', XEC: 'Layer 1', DASH: 'Layer 1', ZEN: 'Layer 1', ROSE: 'Layer 1',
+  // AI
+  IO: 'AI', AI: 'AI', NFP: 'AI', PHB: 'AI', NMR: 'AI', RLC: 'AI', IQ: 'AI',
+  COOKIE: 'AI', AIXBT: 'AI', CGPT: 'AI', KAITO: 'AI', SHELL: 'AI', SAHARA: 'AI',
+  // DeFi
+  CRV: 'DeFi', MKR: 'DeFi', SNX: 'DeFi', CAKE: 'DeFi', SUSHI: 'DeFi', COMP: 'DeFi',
+  RUNE: 'DeFi', DYDX: 'DeFi', GMX: 'DeFi', '1INCH': 'DeFi', PYTH: 'DeFi', WOO: 'DeFi',
+  RAY: 'DeFi', ORCA: 'DeFi', AERO: 'DeFi', MORPHO: 'DeFi', EIGEN: 'DeFi', ETHFI: 'DeFi',
+  CVX: 'DeFi', BAL: 'DeFi', YFI: 'DeFi', UMA: 'DeFi', API3: 'DeFi', BAND: 'DeFi',
+  JTO: 'DeFi', KMNO: 'DeFi', DRIFT: 'DeFi', SYRUP: 'DeFi', SKY: 'DeFi',
+  // Meme
+  PENGU: 'Meme', PNUT: 'Meme', NEIRO: 'Meme', BOME: 'Meme', TURBO: 'Meme',
+  MEME: 'Meme', TRUMP: 'Meme', DOGS: 'Meme', NOT: 'Meme', '1000SATS': 'Meme',
+  ORDI: 'Meme', PEOPLE: 'Meme', ACT: 'Meme', TST: 'Meme', '1000CHEEMS': 'Meme',
+  '1MBABYDOGE': 'Meme', BROCCOLI714: 'Meme', MUBARAK: 'Meme', BANANAS31: 'Meme',
+  // Layer 2
+  POL: 'Layer 2', MATIC: 'Layer 2', STRK: 'Layer 2', ZK: 'Layer 2', IMX: 'Layer 2',
+  STX: 'Layer 2', MANTA: 'Layer 2', METIS: 'Layer 2', SCR: 'Layer 2', ZRO: 'Layer 2',
+  LRC: 'Layer 2', CELO: 'Layer 2', SKL: 'Layer 2', CTSI: 'Layer 2', LINEA: 'Layer 2',
+  // RWA
+  OM: 'RWA', TRU: 'RWA', POLYX: 'RWA', RSR: 'RWA', PAXG: 'RWA', PLUME: 'RWA',
+  USUAL: 'RWA', CFG: 'RWA',
+};
+
+export const EXCLUDED_STABLE_BASES = new Set([
+  'USDC', 'FDUSD', 'TUSD', 'USDP', 'BUSD', 'DAI', 'USD1', 'RLUSD', 'USDE',
+  'BFUSD', 'EURI', 'EUR', 'AEUR', 'XUSD', 'USDJ', 'SUSD', 'USTC', 'PYUSD', 'U',
+]);
+
+export function isExcludedBinanceBase(baseAsset: string): boolean {
+  if (EXCLUDED_STABLE_BASES.has(baseAsset)) return true;
+  if (/(UP|DOWN|BULL|BEAR)$/.test(baseAsset) && baseAsset.length > 4) return true;
+  return false;
+}
+
+export function resolveSectorForBase(baseAsset: string): SectorName {
+  const curated = COIN_META_MAP[`${baseAsset}USDT`];
+  if (curated) return curated.sector;
+  return EXTRA_SECTOR_MAP[baseAsset] ?? 'Altcoin';
+}
+
 function deterministicHash(seed: string): number {
   let hash = 2166136261;
   for (let i = 0; i < seed.length; i++) {

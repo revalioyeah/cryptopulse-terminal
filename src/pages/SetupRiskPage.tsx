@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import type { BacktestResult } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import { formatPercent, formatPrice } from '../utils/format';
+import { CoinSearchSelect } from '../components/ui/CoinSearchSelect';
 import { BacktestPanel } from '../components/setup/BacktestPanel';
 import { FuturesSetupForm } from '../components/setup/FuturesSetupForm';
 import { SpotModePanel } from '../components/setup/SpotModePanel';
@@ -52,18 +53,12 @@ export function SetupRiskPage() {
         <div className="flex flex-wrap items-center gap-2.5">
           {/* Coin Selector */}
           <div className="flex items-center gap-2">
-            <select
-              aria-label="Pilih Coin Setup"
+            <CoinSearchSelect
+              coins={coins}
               value={coin.symbol}
-              onChange={(e) => setSelectedSymbol(e.target.value)}
-              className="min-h-[42px] rounded-xl border border-[#2B3139] bg-[#0B0E11] px-3 text-xs font-bold text-[#EAECEF]"
-            >
-              {coins.map((c) => (
-                <option key={c.symbol} value={c.symbol}>
-                  {c.baseAsset}/USDT
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedSymbol}
+              className="min-w-[160px]"
+            />
             <div className="hidden text-right sm:block">
               <p className="font-mono tabular-nums text-xs font-bold text-[#EAECEF]">
                 {formatPrice(coin.price)}

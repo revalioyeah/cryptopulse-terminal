@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
   CandlestickChart,
+  ChevronLeft,
+  ChevronRight,
   Search,
   ShieldCheck,
   Star,
@@ -26,7 +28,18 @@ const PRESETS: Array<{ id: ScreenerPreset; label: string }> = [
   { id: 'HIGH_OI', label: 'High OI' },
 ];
 
-const SECTORS: Array<SectorName | 'ALL'> = ['ALL', 'Layer 1', 'AI', 'DeFi', 'Meme', 'Layer 2', 'RWA'];
+const SECTORS: Array<SectorName | 'ALL'> = [
+  'ALL',
+  'Layer 1',
+  'AI',
+  'DeFi',
+  'Meme',
+  'Layer 2',
+  'RWA',
+  'Altcoin',
+];
+
+const PAGE_SIZE = 50;
 
 export function ScreenerPage() {
   const coins = useAppStore((s) => s.coins);
@@ -44,6 +57,7 @@ export function ScreenerPage() {
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('quoteVolume24h');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const [page, setPage] = useState(1);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -52,7 +66,12 @@ export function ScreenerPage() {
       setSortKey(key);
       setSortDir('desc');
     }
+    setPage(1);
   };
+
+  useEffect(() => {
+    setPage(1);
+  }, [sectorFilter, preset, search]);
 
   const filteredCoins = useMemo<Coin[]>(() => {
     const q = search.trim().toLowerCase();
@@ -86,6 +105,13 @@ export function ScreenerPage() {
       return (a[sortKey] - b[sortKey]) * mul;
     });
   }, [coins, sectorFilter, preset, search, watchlist, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredCoins.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const visibleCoins = useMemo(
+    () => filteredCoins.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [filteredCoins, safePage],
+  );
 
   const handleStar = (coin: Coin) => {
     const added = toggleWatchlist(coin.symbol);
@@ -252,7 +278,7 @@ export function ScreenerPage() {
                   </td>
                 </tr>
               ) : (
-                filteredCoins.map((coin) => {
+                visibleCoins.map((coin) => {
                   const isStarred = watchlist.includes(coin.symbol);
                   const pos = coin.priceChangePercent24h >= 0;
                   const rsiColor =
@@ -369,7 +395,7 @@ export function ScreenerPage() {
             Tidak ada aset yang cocok dengan filter preset atau kata kunci ini.
           </div>
         ) : (
-          filteredCoins.map((coin) => {
+          visibleCoins.map((coin) => {
             const isStarred = watchlist.includes(coin.symbol);
             const pos = coin.priceChangePercent24h >= 0;
 
@@ -470,6 +496,39 @@ export function ScreenerPage() {
           })
         )}
       </section>
+
+      {/* Pagination Bar */}
+      {totalPages > 1 && (
+        <div className="cp-card flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs">
+          <span className="font-mono tabular-nums text-[#848E9C]">
+            Menampilkan {(safePage - 1) * PAGE_SIZE + 1}–
+            {Math.min(safePage * PAGE_SIZE, filteredCoins.length)} dari {filteredCoins.length} aset Binance USDT
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              disabled={safePage <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="inline-flex min-h-[40px] items-center gap-1 rounded-lg border border-[#2B3139] bg-[#0B0E11] px-3 font-semibold text-[#EAECEF] transition hover:border-[#F0B90B]/60 disabled:opacity-40"
+            >
+              <ChevronLeft className="h-4 w-4" />
+              Prev
+            </button>
+            <span className="font-mono tabular-nums px-2 font-bold text-[#F0B90B]">
+              {safePage} / {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={safePage >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="inline-flex min-h-[40px] items-center gap-1 rounded-lg border border-[#2B3139] bg-[#0B0E11] px-3 font-semibold text-[#EAECEF] transition hover:border-[#F0B90B]/60 disabled:opacity-40"
+            >
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

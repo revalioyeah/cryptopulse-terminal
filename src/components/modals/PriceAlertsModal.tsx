@@ -4,6 +4,7 @@ import type { AlertCondition } from '../../types';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { formatDateTime, formatPrice, formatRawPrice } from '../../utils/format';
+import { CoinSearchSelect } from '../ui/CoinSearchSelect';
 import { Modal } from '../ui/Modal';
 
 export function PriceAlertsModal() {
@@ -89,17 +90,11 @@ export function PriceAlertsModal() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-[11px] text-[#848E9C]">Aset Coin</label>
-              <select
+              <CoinSearchSelect
+                coins={coins}
                 value={symbol}
-                onChange={(e) => handleSymbolChange(e.target.value)}
-                className="min-h-[42px] w-full rounded-xl border border-[#2B3139] bg-[#161A1E] px-3 text-xs font-bold text-[#EAECEF]"
-              >
-                {coins.map((c) => (
-                  <option key={c.symbol} value={c.symbol}>
-                    {c.baseAsset}/USDT ({formatPrice(c.price)})
-                  </option>
-                ))}
-              </select>
+                onChange={handleSymbolChange}
+              />
             </div>
 
             <div>

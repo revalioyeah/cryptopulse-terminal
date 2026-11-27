@@ -82,7 +82,10 @@ function MoverList({
 
 export function TopMovers({ coins, onSelectCoin }: TopMoversProps) {
   const { gainers, losers } = useMemo(() => {
-    const sorted = [...coins].sort((a, b) => b.priceChangePercent24h - a.priceChangePercent24h);
+    const liquid =
+      coins.length > 40 ? coins.filter((c) => c.quoteVolume24h >= 500_000) : coins;
+    const pool = liquid.length >= 10 ? liquid : coins;
+    const sorted = [...pool].sort((a, b) => b.priceChangePercent24h - a.priceChangePercent24h);
     return {
       gainers: sorted.slice(0, 5),
       losers: [...sorted].reverse().slice(0, 5),

@@ -24,6 +24,7 @@ import {
 import { AllocationDonutChart } from '../components/portfolio/AllocationDonutChart';
 import { PortfolioPerfChart } from '../components/portfolio/PortfolioPerfChart';
 import { PartialSellModal } from '../components/portfolio/PartialSellModal';
+import { CoinSearchSelect } from '../components/ui/CoinSearchSelect';
 import { Modal } from '../components/ui/Modal';
 
 const ALLOC_COLORS = ['#F0B90B', '#00C087', '#38BDF8', '#FB923C', '#EC4899', '#94A3B8'];
@@ -508,17 +509,11 @@ export function PortfolioPage() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <label className="mb-1 block text-[11px] text-[#848E9C]">Aset Coin</label>
-              <select
+              <CoinSearchSelect
+                coins={coins}
                 value={buySymbol}
-                onChange={(e) => handleSelectBuyCoin(e.target.value)}
-                className="min-h-[42px] w-full rounded-xl border border-[#2B3139] bg-[#0B0E11] px-2.5 text-xs font-bold text-[#EAECEF]"
-              >
-                {coins.map((c) => (
-                  <option key={c.symbol} value={c.symbol}>
-                    {c.baseAsset}/USDT
-                  </option>
-                ))}
-              </select>
+                onChange={handleSelectBuyCoin}
+              />
             </div>
 
             <div>

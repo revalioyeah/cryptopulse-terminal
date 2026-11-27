@@ -12,6 +12,7 @@ import { buildTechnicalSummary, evaluateSingleTimeframeTrend } from '../services
 import { useAppStore } from '../store/useAppStore';
 import { useTradingStore } from '../store/useTradingStore';
 import { formatCompactUsd, formatPercent, formatPrice } from '../utils/format';
+import { CoinSearchSelect } from '../components/ui/CoinSearchSelect';
 import { InteractiveCandleChart } from '../components/analysis/InteractiveCandleChart';
 import {
   DerivativesSnapshotCard,
@@ -74,22 +75,13 @@ export function AnalysisPage() {
       {/* Header & Coin Switcher */}
       <div className="cp-card flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-3">
-          <div className="min-w-[170px] flex-1 sm:flex-none">
-            <label htmlFor="analysis-coin-select" className="sr-only">
-              Pilih Coin
-            </label>
-            <select
+          <div className="min-w-[200px] flex-1 sm:flex-none">
+            <CoinSearchSelect
               id="analysis-coin-select"
+              coins={coins}
               value={coin.symbol}
-              onChange={(e) => setSelectedSymbol(e.target.value)}
-              className="min-h-[42px] w-full rounded-xl border border-[#2B3139] bg-[#0B0E11] px-3 text-sm font-bold text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
-            >
-              {coins.map((c) => (
-                <option key={c.symbol} value={c.symbol}>
-                  {c.baseAsset}/USDT — {c.name}
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedSymbol}
+            />
           </div>
 
           <div>

@@ -1,4 +1,4 @@
-export type SectorName = 'Layer 1' | 'AI' | 'DeFi' | 'Meme' | 'Layer 2' | 'RWA';
+export type SectorName = 'Layer 1' | 'AI' | 'DeFi' | 'Meme' | 'Layer 2' | 'RWA' | 'Altcoin';
 
 export type Timeframe = '5m' | '15m' | '1h' | '4h' | '1d' | '1w';
 

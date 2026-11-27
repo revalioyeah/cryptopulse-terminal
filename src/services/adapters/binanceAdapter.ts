@@ -5,6 +5,8 @@ import {
   buildFallbackCoins,
   deriveTechnicalHints,
   generateFallbackCandles,
+  isExcludedBinanceBase,
+  resolveSectorForBase,
 } from './mockData';
 
 const BINANCE_REST_BASE =
@@ -24,6 +26,15 @@ interface BinanceTicker24hRaw {
   lowPrice: string;
   volume: string;
   quoteVolume: string;
+}
+
+interface BinanceExchangeInfoRaw {
+  symbols?: Array<{
+    symbol: string;
+    status: string;
+    baseAsset: string;
+    quoteAsset: string;
+  }>;
 }
 
 interface BinanceMiniTickerWsRaw {
@@ -52,9 +63,7 @@ type BinanceKlineRaw = [
   string,
 ];
 
-const CURATED_SYMBOLS = new Set(CURATED_COINS.map((c) => c.symbol));
-
-async function fetchWithTimeout(url: string, timeoutMs = 6000): Promise<Response> {
+async function fetchWithTimeout(url: string, timeoutMs = 8000): Promise<Response> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -71,20 +80,53 @@ export interface TickerFetchResult {
 
 export async function fetchBinanceTickers24h(): Promise<TickerFetchResult> {
   try {
-    const res = await fetchWithTimeout(`${BINANCE_REST_BASE}/api/v3/ticker/24hr`, 6500);
-    if (!res.ok) throw new Error(`Binance REST HTTP ${res.status}`);
-    const data = (await res.json()) as BinanceTicker24hRaw[];
+    const [tickerRes, exchangeInfoRes] = await Promise.all([
+      fetchWithTimeout(`${BINANCE_REST_BASE}/api/v3/ticker/24hr`, 8500),
+      fetchWithTimeout(`${BINANCE_REST_BASE}/api/v3/exchangeInfo?permissions=SPOT`, 8500).catch(
+        () => null,
+      ),
+    ]);
+
+    if (!tickerRes.ok) throw new Error(`Binance REST HTTP ${tickerRes.status}`);
+    const data = (await tickerRes.json()) as BinanceTicker24hRaw[];
     if (!Array.isArray(data) || data.length === 0) {
       throw new Error('Empty ticker response');
+    }
+
+    // Build authoritative set of active SPOT TRADING USDT pairs from Binance exchangeInfo
+    let tradingUsdtMap: Map<string, string> | null = null;
+    if (exchangeInfoRes && exchangeInfoRes.ok) {
+      try {
+        const info = (await exchangeInfoRes.json()) as BinanceExchangeInfoRaw;
+        if (Array.isArray(info.symbols) && info.symbols.length > 0) {
+          tradingUsdtMap = new Map();
+          for (const s of info.symbols) {
+            if (s.quoteAsset === 'USDT' && s.status === 'TRADING') {
+              tradingUsdtMap.set(s.symbol, s.baseAsset);
+            }
+          }
+        }
+      } catch {
+        tradingUsdtMap = null;
+      }
     }
 
     const now = Date.now();
     const mapped: Coin[] = [];
 
     for (const row of data) {
-      if (!CURATED_SYMBOLS.has(row.symbol)) continue;
-      const meta = COIN_META_MAP[row.symbol];
-      if (!meta) continue;
+      if (!row.symbol.endsWith('USDT')) continue;
+
+      let baseAsset: string;
+      if (tradingUsdtMap) {
+        const verifiedBase = tradingUsdtMap.get(row.symbol);
+        if (!verifiedBase) continue; // Skip delisted / BREAK / non-SPOT pairs
+        baseAsset = verifiedBase;
+      } else {
+        baseAsset = row.symbol.slice(0, -4);
+      }
+
+      if (!baseAsset || isExcludedBinanceBase(baseAsset)) continue;
 
       const price = Number.parseFloat(row.lastPrice);
       const priceChange24h = Number.parseFloat(row.priceChange);
@@ -94,8 +136,11 @@ export async function fetchBinanceTickers24h(): Promise<TickerFetchResult> {
       const volume24h = Number.parseFloat(row.volume);
       const quoteVolume24h = Number.parseFloat(row.quoteVolume);
 
-      if (!Number.isFinite(price) || price <= 0) continue;
+      if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(quoteVolume24h) || quoteVolume24h <= 0) {
+        continue;
+      }
 
+      const meta = COIN_META_MAP[row.symbol];
       const hints = deriveTechnicalHints(
         row.symbol,
         price,
@@ -107,9 +152,9 @@ export async function fetchBinanceTickers24h(): Promise<TickerFetchResult> {
 
       mapped.push({
         symbol: row.symbol,
-        baseAsset: meta.baseAsset,
-        name: meta.name,
-        sector: meta.sector,
+        baseAsset,
+        name: meta?.name ?? baseAsset,
+        sector: meta?.sector ?? resolveSectorForBase(baseAsset),
         price,
         priceChange24h,
         priceChangePercent24h,
@@ -117,22 +162,24 @@ export async function fetchBinanceTickers24h(): Promise<TickerFetchResult> {
         low24h,
         volume24h,
         quoteVolume24h,
-        marketCapRank: meta.marketCapRank,
+        marketCapRank: meta?.marketCapRank ?? 999,
         lastUpdated: now,
         ...hints,
       });
     }
 
-    // Ensure any curated coin missing from Binance (e.g., VIRTUALUSDT) is still represented
-    const foundSymbols = new Set(mapped.map((c) => c.symbol));
-    const fallbackCoins = buildFallbackCoins();
-    for (const fb of fallbackCoins) {
-      if (!foundSymbols.has(fb.symbol)) {
-        mapped.push(fb);
+    if (mapped.length === 0) {
+      throw new Error('No active USDT pairs parsed');
+    }
+
+    // Sort by 24h USDT volume descending and assign dynamic rank for non-curated pairs
+    mapped.sort((a, b) => b.quoteVolume24h - a.quoteVolume24h);
+    for (let i = 0; i < mapped.length; i++) {
+      if (mapped[i].marketCapRank === 999) {
+        mapped[i].marketCapRank = Math.max(40, i + 1);
       }
     }
 
-    mapped.sort((a, b) => b.quoteVolume24h - a.quoteVolume24h);
     return { coins: mapped, isFallback: false };
   } catch {
     return { coins: buildFallbackCoins(), isFallback: true };
@@ -296,7 +343,7 @@ export function createBinanceMiniTickerStream(
         if (!Array.isArray(parsed)) return;
         const updates: MiniTickerPayload[] = [];
         for (const item of parsed) {
-          if (!CURATED_SYMBOLS.has(item.s)) continue;
+          if (!item.s.endsWith('USDT')) continue;
           const close = Number.parseFloat(item.c);
           const open = Number.parseFloat(item.o);
           const high = Number.parseFloat(item.h);
