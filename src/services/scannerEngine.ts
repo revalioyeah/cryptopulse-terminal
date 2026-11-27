@@ -32,6 +32,7 @@ import {
   detectSupportResistance,
   evaluateSingleTimeframeTrend,
 } from './indicators';
+import { buildSmartFuturesLevels } from './setupAdvisor';
 import { evaluateSpotQuality, generateSpotDcaPlan } from './spotScoring';
 import { generateId } from '../utils/format';
 import { calculateFuturesRisk } from '../utils/riskCalc';
@@ -345,8 +346,15 @@ export async function runFuturesProScan(
 
   onProgress?.('Menyaring likuiditas & kandidat aktif...', 10);
 
+  // Exclude tokenized equity/ETF tickers so Futures Pro scans native crypto pairs only
+  const NON_CRYPTO_ETFS = new Set([
+    'NVDAB', 'TSLAB', 'AAPLB', 'AMZNB', 'MSFTB', 'METAB', 'GOOGLB', 'MSTRB', 'COINB',
+    'SOXLB', 'SOXSB', 'SKHYB', 'KORUB', 'QQQB', 'SPYB', 'SLVB', 'GLDB', 'INTCB', 'AMDB', 'PLTRB',
+  ]);
+
   // Stage 1: Universe & Liquidity Filter
   let universe = coins.filter((c) => {
+    if (NON_CRYPTO_ETFS.has(c.baseAsset)) return false;
     if (config.universeScope === 'WATCHLIST') {
       return watchSet.has(c.symbol);
     }
@@ -359,21 +367,44 @@ export async function runFuturesProScan(
 
   const offCooldown = universe.filter((c) => now - (cooldowns[c.symbol] ?? 0) >= cooldownMs);
 
-  // Prioritize active movers with real range/momentum activity for deep Kline audit
-  const rankedCandidates = [...offCooldown]
-    .sort((a, b) => {
-      const scoreCoin = (c: Coin): number => {
-        const volLog = Math.log10(Math.max(c.quoteVolume24h, 100_000));
-        const moveScore = Math.min(Math.abs(c.priceChangePercent24h), 18);
-        if (config.rule === 'RSI_OVERSOLD_BOUNCE') {
-          const ext = Math.abs(50 - c.rsi14);
-          return ext * 1.4 + volLog * 3;
-        }
-        return moveScore * 1.3 + (c.nearBreakout ? 8 : 0) + volLog * 3.5;
-      };
-      return scoreCoin(b) - scoreCoin(a);
-    })
-    .slice(0, 10);
+  // Balanced 50/50 LONG & SHORT candidate discovery (eliminates bullish-only bias!)
+  const longScore = (c: Coin): number => {
+    const volLog = Math.log10(Math.max(c.quoteVolume24h, 100_000));
+    const range = Math.max(c.high24h - c.low24h, c.price * 0.005);
+    const pos = (c.price - c.low24h) / range;
+    if (config.rule === 'RSI_OVERSOLD_BOUNCE') {
+      return Math.max(0, 50 - c.rsi14) * 1.5 + volLog * 3;
+    }
+    const bullMom = c.priceChangePercent24h > 0 ? Math.min(c.priceChangePercent24h, 16) : -4;
+    return bullMom * 1.3 + (pos >= 0.72 ? 6 : 0) + volLog * 3.2;
+  };
+
+  const shortScore = (c: Coin): number => {
+    const volLog = Math.log10(Math.max(c.quoteVolume24h, 100_000));
+    const range = Math.max(c.high24h - c.low24h, c.price * 0.005);
+    const pos = (c.price - c.low24h) / range;
+    if (config.rule === 'RSI_OVERSOLD_BOUNCE') {
+      return Math.max(0, c.rsi14 - 50) * 1.5 + volLog * 3;
+    }
+    const bearMom = c.priceChangePercent24h < 0 ? Math.min(Math.abs(c.priceChangePercent24h), 16) : -4;
+    return bearMom * 1.3 + (pos <= 0.28 ? 6 : 0) + volLog * 3.2;
+  };
+
+  let rankedCandidates: Coin[] = [];
+  if (config.directionFilter === 'LONG_ONLY') {
+    rankedCandidates = [...offCooldown].sort((a, b) => longScore(b) - longScore(a)).slice(0, 10);
+  } else if (config.directionFilter === 'SHORT_ONLY') {
+    rankedCandidates = [...offCooldown].sort((a, b) => shortScore(b) - shortScore(a)).slice(0, 10);
+  } else {
+    // BOTH: take Top 6 Long-leaning + Top 6 Short-leaning candidates so SHORT & LONG get equal audit coverage
+    const topLongs = [...offCooldown].sort((a, b) => longScore(b) - longScore(a)).slice(0, 6);
+    const seen = new Set(topLongs.map((c) => c.symbol));
+    const topShorts = [...offCooldown]
+      .filter((c) => !seen.has(c.symbol))
+      .sort((a, b) => shortScore(b) - shortScore(a))
+      .slice(0, 6);
+    rankedCandidates = [...topLongs, ...topShorts];
+  }
 
   // Stage 2: Real BTC Higher-Timeframe Macro Trend
   onProgress?.(`Cek struktur HTF BTC (${htfTimeframe.toUpperCase()})...`, 20);
@@ -404,7 +435,7 @@ export async function runFuturesProScan(
     };
   }
 
-  // Stage 3-5: Evaluate top candidates on REAL closed Klines in concurrent batches of 4
+  // Stage 3-5: Evaluate balanced Long & Short candidates on REAL closed Klines in concurrent batches of 4
   const strategy = mapRuleToStrategy(config.rule);
   let doneCount = 0;
 
@@ -425,7 +456,7 @@ export async function runFuturesProScan(
 
       doneCount += 1;
       onProgress?.(
-        `Validasi Kline ${config.timeframe.toUpperCase()}+${htfTimeframe.toUpperCase()} (${doneCount}/${rankedCandidates.length}: ${coin.baseAsset})...`,
+        `Validasi Kline & POI ${config.timeframe.toUpperCase()}+${htfTimeframe.toUpperCase()} (${doneCount}/${rankedCandidates.length}: ${coin.baseAsset})...`,
         25 + Math.round((doneCount / rankedCandidates.length) * 65),
       );
 
@@ -472,6 +503,9 @@ export async function runFuturesProScan(
         }
       }
 
+      // Compute institutional Limit Pullback POI Levels (OB / FVG / OTE / S-R Flip) instead of market chasing
+      const smartPoi = buildSmartFuturesLevels(closed, coin.price, chosenDir, 1.5, 'POI_LIMIT');
+
       // Run Anti-Look-Ahead Backtest on 300 real closed candles
       const bt = runBacktest(closed, {
         symbol: coin.symbol,
@@ -482,34 +516,16 @@ export async function runFuturesProScan(
         feeRate: 0.001,
       });
 
-      // Structural + ATR Stop Loss & S/R Clearance calculation
-      const entry = coin.price;
-      const rawAtrDist = Math.max(chosenEval.atr14 * 1.5, entry * 0.008);
+      const slDist = Math.abs(smartPoi.avgEntry - smartPoi.stopLoss);
       const nearestSup = chosenEval.supports[0];
       const nearestRes = chosenEval.resistances[0];
-
-      let slDist = rawAtrDist;
-      if (chosenDir === 'LONG' && nearestSup && nearestSup < entry) {
-        const structDist = (entry - nearestSup) + chosenEval.atr14 * 0.35;
-        if (structDist >= entry * 0.006 && structDist <= rawAtrDist * 1.45) {
-          slDist = structDist;
-        }
-      } else if (chosenDir === 'SHORT' && nearestRes && nearestRes > entry) {
-        const structDist = (nearestRes - entry) + chosenEval.atr14 * 0.35;
-        if (structDist >= entry * 0.006 && structDist <= rawAtrDist * 1.45) {
-          slDist = structDist;
-        }
-      }
-      // Cap maximum stop loss distance at 6% so position stays tight & liquidations stay far
-      slDist = Math.min(slDist, entry * 0.06);
-
       const opposingDist =
         chosenDir === 'LONG'
-          ? nearestRes && nearestRes > entry
-            ? nearestRes - entry
+          ? nearestRes && nearestRes > smartPoi.avgEntry
+            ? nearestRes - smartPoi.avgEntry
             : slDist * 2.5
-          : nearestSup && nearestSup < entry
-            ? entry - nearestSup
+          : nearestSup && nearestSup < smartPoi.avgEntry
+            ? smartPoi.avgEntry - nearestSup
             : slDist * 2.5;
       const rrToResistance = Number((opposingDist / Math.max(slDist, 1e-9)).toFixed(2));
 
@@ -520,7 +536,7 @@ export async function runFuturesProScan(
         rejectReason = `Melawan trend HTF BTC (${btcHtfTrend})`;
       }
       if (!rejectReason && rrToResistance < 1.15) {
-        rejectReason = `Ruang ke ${chosenDir === 'LONG' ? 'Resistance' : 'Support'} terlalu sempit (R:R ${rrToResistance} < 1.15)`;
+        rejectReason = `Ruang dari Limit POI ke ${chosenDir === 'LONG' ? 'Resistance' : 'Support'} terlalu sempit (R:R ${rrToResistance} < 1.15)`;
       }
       if (!rejectReason && chosenEval.score < config.minConfluenceScore) {
         rejectReason = `Skor Konfluensi ${chosenEval.score}/100 < batas ${config.minConfluenceScore}`;
@@ -552,7 +568,13 @@ export async function runFuturesProScan(
         htfTrend,
         btcAligned: chosenEval.btcAligned,
         rrToResistance,
-        reasons: chosenEval.reasons,
+        poiLabel: smartPoi.poiLabel,
+        poiEntryPrice: smartPoi.entry1,
+        poiDistancePercent: smartPoi.poiDistancePercent,
+        reasons: [
+          `Limit ${smartPoi.poiLabel} (${smartPoi.poiDistancePercent >= 0 ? '+' : ''}${smartPoi.poiDistancePercent}%)`,
+          ...chosenEval.reasons,
+        ].slice(0, 4),
         rejectReason,
       };
 
@@ -560,27 +582,26 @@ export async function runFuturesProScan(
         return { audit, rankWeight: chosenEval.score };
       }
 
-      // Build Production Futures Setup & Signal Log
-      const stopLoss = chosenDir === 'LONG' ? entry - slDist : entry + slDist;
-      const tp1 = chosenDir === 'LONG' ? entry + slDist * 1.5 : entry - slDist * 1.5;
-      const tp2 = chosenDir === 'LONG' ? entry + slDist * 2.4 : entry - slDist * 2.4;
-      const tp3 = chosenDir === 'LONG' ? entry + slDist * 3.5 : entry - slDist * 3.5;
-
+      // Build Production Futures Limit POI Layering Setup & Signal Log
       const risk = calculateFuturesRisk({
         direction: chosenDir,
-        entries: [{ price: entry, weightPercent: 100 }],
-        stopLoss,
+        entries: [
+          { price: smartPoi.entry1, weightPercent: 40 },
+          { price: smartPoi.entry2, weightPercent: 35 },
+          { price: smartPoi.entry3, weightPercent: 25 },
+        ],
+        stopLoss: smartPoi.stopLoss,
         takeProfits: [
-          { label: 'TP1', price: tp1, allocationPercent: 40 },
-          { label: 'TP2', price: tp2, allocationPercent: 35 },
-          { label: 'TP3', price: tp3, allocationPercent: 25 },
+          { label: 'TP1', price: smartPoi.tp1, allocationPercent: 40 },
+          { label: 'TP2', price: smartPoi.tp2, allocationPercent: 35 },
+          { label: 'TP3', price: smartPoi.tp3, allocationPercent: 25 },
         ],
         accountEquity: config.defaultFuturesEquity,
         riskPercent: config.defaultRiskPercent,
-        leverage: config.defaultLeverage,
+        leverage: Math.min(config.defaultLeverage, smartPoi.recommendedLeverage),
       });
 
-      const summary = `Skor ${chosenEval.score}/100 | Grade ${bt.grade} (PF ${bt.profitFactor}, WR ${bt.winRate}%) | HTF ${htfTrend} | RSI ${chosenEval.rsi14} | ADX ${chosenEval.adx14} | Vol ${chosenEval.volumeRatio}x`;
+      const summary = `Limit ${smartPoi.poiLabel} (${smartPoi.poiDistancePercent >= 0 ? '+' : ''}${smartPoi.poiDistancePercent}% dari live) | Skor ${chosenEval.score} · Grade ${bt.grade} (PF ${bt.profitFactor}) | HTF ${htfTrend} | RSI ${chosenEval.rsi14} | ADX ${chosenEval.adx14}`;
 
       const log: AutoSignalLog = {
         id: generateId('sig'),
@@ -590,14 +611,17 @@ export async function runFuturesProScan(
         rule: config.rule,
         direction: chosenDir,
         timeframe: config.timeframe,
-        entryPrice: entry,
-        stopLoss: Number(stopLoss.toPrecision(6)),
-        takeProfit: Number(tp2.toPrecision(6)),
-        rrRatio: risk.rrTp2,
+        entryPrice: smartPoi.entry1,
+        entry2: smartPoi.entry2,
+        entry3: smartPoi.entry3,
+        poiLabel: smartPoi.poiLabel,
+        stopLoss: smartPoi.stopLoss,
+        takeProfit: smartPoi.tp2,
+        rrRatio: risk.netRrTp2,
         confluenceScore: chosenEval.score,
         rsiReal: chosenEval.rsi14,
         adxReal: chosenEval.adx14,
-        reasons: chosenEval.reasons,
+        reasons: audit.reasons,
         scoreOrGrade: `Skor ${chosenEval.score} · Grade ${bt.grade}`,
         summary,
         telegramSent: false,
@@ -611,29 +635,33 @@ export async function runFuturesProScan(
         baseAsset: coin.baseAsset,
         direction: chosenDir,
         timeframe: config.timeframe,
-        entryMode: 'SINGLE',
-        entries: [{ price: entry, weightPercent: 100 }],
-        avgEntry: entry,
-        stopLoss: Number(stopLoss.toPrecision(6)),
+        entryMode: 'LAYERING',
+        entries: [
+          { price: smartPoi.entry1, weightPercent: 40 },
+          { price: smartPoi.entry2, weightPercent: 35 },
+          { price: smartPoi.entry3, weightPercent: 25 },
+        ],
+        avgEntry: risk.avgEntry,
+        stopLoss: smartPoi.stopLoss,
         takeProfits: [
-          { label: 'TP1', price: Number(tp1.toPrecision(6)), allocationPercent: 40 },
-          { label: 'TP2', price: Number(tp2.toPrecision(6)), allocationPercent: 35 },
-          { label: 'TP3', price: Number(tp3.toPrecision(6)), allocationPercent: 25 },
+          { label: 'TP1', price: smartPoi.tp1, allocationPercent: 40 },
+          { label: 'TP2', price: smartPoi.tp2, allocationPercent: 35 },
+          { label: 'TP3', price: smartPoi.tp3, allocationPercent: 25 },
         ],
         accountEquity: config.defaultFuturesEquity,
         riskPercent: config.defaultRiskPercent,
-        leverage: config.defaultLeverage,
+        leverage: Math.min(config.defaultLeverage, smartPoi.recommendedLeverage),
         riskAmountUsdt: risk.riskAmountUsdt,
         positionSizeUsdt: risk.positionSizeUsdt,
         positionQty: risk.positionQty,
         marginRequiredUsdt: risk.marginRequiredUsdt,
         estimatedLiquidation: risk.estimatedLiquidation,
-        rrTp1: risk.rrTp1,
-        rrTp2: risk.rrTp2,
-        rrTp3: risk.rrTp3,
+        rrTp1: risk.netRrTp1,
+        rrTp2: risk.netRrTp2,
+        rrTp3: risk.netRrTp3,
         btcBetaAligned: chosenEval.btcAligned,
         confluenceChecks: [
-          `Scanner Pro (${config.timeframe.toUpperCase()} / HTF ${htfTimeframe.toUpperCase()})`,
+          `Limit POI: ${smartPoi.poiLabel}`,
           `Backtest Grade ${bt.grade} · PF ${bt.profitFactor}`,
           ...chosenEval.reasons,
         ],
@@ -665,7 +693,7 @@ export async function runFuturesProScan(
     .slice(0, 3)
     .map((item) => item.signal);
 
-  onProgress?.('Selesai memvalidasi sinyal Futures.', 100);
+  onProgress?.('Selesai memvalidasi sinyal Long & Short berbasis Limit POI.', 100);
 
   return {
     report: {

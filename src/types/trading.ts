@@ -157,11 +157,15 @@ export interface SetupDraftPayload {
   mode: 'FUTURES' | 'SPOT';
   direction?: TradeDirection;
   timeframe?: Timeframe;
+  entryMode?: EntryMode;
   entryPrice?: number;
+  entry2?: number;
+  entry3?: number;
   stopLoss?: number;
   tp1?: number;
   tp2?: number;
   tp3?: number;
+  poiLabel?: string;
   notes?: string;
 }
 
@@ -208,6 +212,9 @@ export interface AutoSignalLog {
   direction: TradeDirection | 'ACCUMULATE';
   timeframe?: Timeframe;
   entryPrice: number;
+  entry2?: number;
+  entry3?: number;
+  poiLabel?: string;
   stopLoss?: number;
   takeProfit?: number;
   rrRatio?: number;
@@ -239,6 +246,9 @@ export interface FuturesScanCandidateAudit {
   htfTrend: 'Bullish' | 'Bearish' | 'Sideways';
   btcAligned: boolean;
   rrToResistance: number;
+  poiLabel?: string;
+  poiEntryPrice?: number;
+  poiDistancePercent?: number;
   reasons: string[];
   rejectReason?: string;
 }

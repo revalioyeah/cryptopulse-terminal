@@ -670,6 +670,12 @@ export function AutoSignalBotPanel() {
                       <span className="font-mono tabular-nums text-[10px] text-[#848E9C]">
                         RSI {a.rsi14} · ADX {a.adx14} · Vol {a.volumeRatio}x · HTF {a.htfTrend}
                       </span>
+                      {a.poiLabel && a.poiEntryPrice && (
+                        <span className="font-mono tabular-nums rounded bg-[#0B0E11] px-1.5 py-0.5 text-[10px] text-[#38BDF8]">
+                          Limit {a.poiLabel} @ {formatPrice(a.poiEntryPrice)} ({(a.poiDistancePercent ?? 0) >= 0 ? '+' : ''}
+                          {a.poiDistancePercent ?? 0}%)
+                        </span>
+                      )}
                     </div>
                     <p
                       className={`mt-0.5 text-[11px] ${
@@ -682,14 +688,32 @@ export function AutoSignalBotPanel() {
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => openAnalysis(a.symbol)}
-                    className="inline-flex min-h-[36px] shrink-0 items-center gap-1 rounded-lg border border-[#2B3139] bg-[#0B0E11] px-2.5 text-[11px] text-[#EAECEF] hover:border-[#F0B90B]/60 hover:text-[#F0B90B]"
-                  >
-                    <CandlestickChart className="h-3 w-3" />
-                    Chart
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => openAnalysis(a.symbol)}
+                      className="inline-flex min-h-[36px] items-center gap-1 rounded-lg border border-[#2B3139] bg-[#0B0E11] px-2.5 text-[11px] text-[#EAECEF] hover:border-[#F0B90B]/60 hover:text-[#F0B90B]"
+                    >
+                      <CandlestickChart className="h-3 w-3" />
+                      Chart
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openSetupForCoin(a.symbol, 'FUTURES', {
+                          direction: a.direction,
+                          timeframe: lastFuturesReport.timeframe,
+                          entryMode: 'LAYERING',
+                          entryPrice: a.poiEntryPrice,
+                          poiLabel: a.poiLabel,
+                        })
+                      }
+                      className="inline-flex min-h-[36px] items-center gap-1 rounded-lg bg-[#F0B90B]/15 px-2.5 text-[11px] font-semibold text-[#F0B90B] hover:bg-[#F0B90B] hover:text-[#0B0E11]"
+                    >
+                      <ShieldCheck className="h-3 w-3" />
+                      POI
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -762,6 +786,11 @@ export function AutoSignalBotPanel() {
                         {log.timeframe}
                       </span>
                     )}
+                    {log.poiLabel && (
+                      <span className="rounded bg-[#38BDF8]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[#38BDF8]">
+                        Limit {log.poiLabel}
+                      </span>
+                    )}
                     <span className="font-mono tabular-nums rounded bg-[#0B0E11] px-1.5 py-0.5 text-[10px] text-[#F0B90B]">
                       {log.scoreOrGrade}
                     </span>
@@ -798,7 +827,11 @@ export function AutoSignalBotPanel() {
                             ? log.direction
                             : undefined,
                         timeframe: log.timeframe,
+                        entryMode: log.entry2 && log.entry3 ? 'LAYERING' : 'SINGLE',
                         entryPrice: log.entryPrice,
+                        entry2: log.entry2,
+                        entry3: log.entry3,
+                        poiLabel: log.poiLabel,
                         stopLoss: log.stopLoss,
                         tp2: log.takeProfit,
                         notes: `Scanner Pro: ${log.summary}`,

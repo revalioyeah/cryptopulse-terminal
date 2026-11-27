@@ -98,14 +98,26 @@ export function formatAutoScannerTelegram(log: AutoSignalLog): string {
       ? `Konfluensi:\n${log.reasons.map((r) => `• ${escapeHtml(r)}`).join('\n')}`
       : '';
 
+  const entryBlock =
+    log.entry2 && log.entry3
+      ? [
+          log.poiLabel ? `Zona POI (Limit): <b>${escapeHtml(log.poiLabel)}</b>` : '',
+          `Limit Entry 1 (40%): <code>${formatPrice(log.entryPrice)}</code>`,
+          `Limit Entry 2 (35%): <code>${formatPrice(log.entry2)}</code>`,
+          `Limit Entry 3 (25%): <code>${formatPrice(log.entry3)}</code>`,
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : `Harga Trigger / Avg DCA: <code>${formatPrice(log.entryPrice)}</code>`;
+
   return [
     `${icon} <b>CRYPTOPULSE SCANNER PRO — ${escapeHtml(log.symbol)}</b>`,
     `Mode: <code>${escapeHtml(modeLabel)}</code>`,
     `Rule: <code>${escapeHtml(log.rule)}</code> | <b>${escapeHtml(log.scoreOrGrade)}</b>`,
     '────────────────────',
     `Arah: <b>${log.direction}</b>`,
-    `Harga Trigger / Avg DCA: <code>${formatPrice(log.entryPrice)}</code>`,
-    log.stopLoss ? `Stop Loss (Struktur+ATR): <code>${formatPrice(log.stopLoss)}</code>` : '',
+    entryBlock,
+    log.stopLoss ? `Stop Loss (Invalidasi POI): <code>${formatPrice(log.stopLoss)}</code>` : '',
     log.takeProfit ? `Target TP2 Utama: <code>${formatPrice(log.takeProfit)}</code>` : '',
     metricsLine,
     reasonsBlock,

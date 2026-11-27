@@ -572,3 +572,382 @@ export function detectRsiDivergence(
 
   return 'NONE';
 }
+
+export type PoiZoneKind = 'OB' | 'FVG' | 'OTE' | 'SR_FLIP' | 'EMA_VWAP';
+
+export interface PoiZone {
+  id: string;
+  side: 'LONG' | 'SHORT';
+  kind: PoiZoneKind;
+  label: string;
+  zoneLow: number;
+  zoneHigh: number;
+  entryPrice: number; // Optimal limit entry inside zone
+  invalidationPrice: number; // Clean structural SL beyond zone
+  distancePercent: number; // Signed % from livePrice (negative = below live for LONG, positive = above live for SHORT)
+  strength: number; // 1..100 confluence quality
+  hasFvgConfluence?: boolean;
+}
+
+export interface PoiAnalysisResult {
+  bullishZones: PoiZone[];
+  bearishZones: PoiZone[];
+  bestLongPoi: PoiZone;
+  bestShortPoi: PoiZone;
+  liquiditySweep: 'BULLISH_SWEEP' | 'BEARISH_SWEEP' | 'NONE';
+  swingHigh: number;
+  swingLow: number;
+}
+
+function roundSig(val: number): number {
+  if (!Number.isFinite(val) || val <= 0) return 0;
+  return Number(val.toPrecision(6));
+}
+
+/**
+ * Institutional Smart Money / Price Action POI Detector on closed Binance OHLCV candles:
+ * Detects Unmitigated Bullish & Bearish Order Blocks (OB), Unfilled Fair Value Gaps (FVG),
+ * Fibonacci OTE Golden Pocket (0.618-0.705), Liquidity Sweeps, and EMA20/VWAP/S-R Flip pullback zones.
+ */
+export function detectPoiZones(closedCandles: Candle[], livePrice: number): PoiAnalysisResult {
+  const safePrice = Math.max(livePrice, 1e-8);
+  const atrArr = calculateATR(closedCandles, 14);
+  const ema20Arr = calculateEMA(closedCandles, 20);
+  const vwap = calculateRollingVWAP(closedCandles, 24);
+  const { supports, resistances } = detectSupportResistance(closedCandles);
+
+  const atr = atrArr[atrArr.length - 1]?.value ?? safePrice * 0.015;
+  const ema20 = ema20Arr[ema20Arr.length - 1]?.value ?? safePrice;
+
+  const bullishZones: PoiZone[] = [];
+  const bearishZones: PoiZone[] = [];
+
+  const len = closedCandles.length;
+
+  // 1. Detect Unfilled Fair Value Gaps (FVG) across last 55 closed candles
+  const bullFvgs: Array<{ low: number; high: number; mid: number }> = [];
+  const bearFvgs: Array<{ low: number; high: number; mid: number }> = [];
+
+  if (len >= 10) {
+    const fvgStart = Math.max(2, len - 55);
+    for (let i = len - 1; i >= fvgStart; i--) {
+      const cPrev2 = closedCandles[i - 2];
+      const cCur = closedCandles[i];
+
+      // Bullish FVG: cCur.low > cPrev2.high
+      if (cCur.low > cPrev2.high && cCur.low - cPrev2.high >= atr * 0.22) {
+        const mid = (cCur.low + cPrev2.high) / 2;
+        let mitigated = false;
+        for (let j = i + 1; j < len; j++) {
+          if (closedCandles[j].low <= mid) {
+            mitigated = true;
+            break;
+          }
+        }
+        const distPct = ((cCur.low - safePrice) / safePrice) * 100;
+        if (!mitigated && cPrev2.high < safePrice && distPct <= 0.4 && distPct >= -6.5) {
+          bullFvgs.push({ low: cPrev2.high, high: cCur.low, mid });
+          if (bullFvgs.length <= 2) {
+            bullishZones.push({
+              id: `bull-fvg-${i}`,
+              side: 'LONG',
+              kind: 'FVG',
+              label: 'Bullish FVG (Imbalance 50%)',
+              zoneLow: roundSig(cPrev2.high),
+              zoneHigh: roundSig(cCur.low),
+              entryPrice: roundSig(Math.min(mid, safePrice)),
+              invalidationPrice: roundSig(cPrev2.high - atr * 0.5),
+              distancePercent: Number((((Math.min(mid, safePrice) - safePrice) / safePrice) * 100).toFixed(2)),
+              strength: 82,
+            });
+          }
+        }
+      }
+
+      // Bearish FVG: cCur.high < cPrev2.low
+      if (cCur.high < cPrev2.low && cPrev2.low - cCur.high >= atr * 0.22) {
+        const mid = (cPrev2.low + cCur.high) / 2;
+        let mitigated = false;
+        for (let j = i + 1; j < len; j++) {
+          if (closedCandles[j].high >= mid) {
+            mitigated = true;
+            break;
+          }
+        }
+        const distPct = ((cCur.high - safePrice) / safePrice) * 100;
+        if (!mitigated && cPrev2.low > safePrice && distPct >= -0.4 && distPct <= 6.5) {
+          bearFvgs.push({ low: cCur.high, high: cPrev2.low, mid });
+          if (bearFvgs.length <= 2) {
+            bearishZones.push({
+              id: `bear-fvg-${i}`,
+              side: 'SHORT',
+              kind: 'FVG',
+              label: 'Bearish FVG (Imbalance 50%)',
+              zoneLow: roundSig(cCur.high),
+              zoneHigh: roundSig(cPrev2.low),
+              entryPrice: roundSig(Math.max(mid, safePrice)),
+              invalidationPrice: roundSig(cPrev2.low + atr * 0.5),
+              distancePercent: Number((((Math.max(mid, safePrice) - safePrice) / safePrice) * 100).toFixed(2)),
+              strength: 82,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Detect Unmitigated Bullish & Bearish Order Blocks (OB) across last 80 closed candles
+  if (len >= 15) {
+    const obStart = Math.max(3, len - 80);
+    let bullObFound = 0;
+    let bearObFound = 0;
+
+    for (let i = len - 3; i >= obStart; i--) {
+      const base = closedCandles[i];
+      const next1 = closedCandles[i + 1];
+      const next2 = closedCandles[i + 2];
+      const impulseHigh = Math.max(next1.high, next2.high);
+      const impulseLow = Math.min(next1.low, next2.low);
+
+      // Bullish OB: bearish base candle followed by strong bullish displacement
+      if (
+        bullObFound < 2 &&
+        base.close < base.open &&
+        impulseHigh - base.low >= atr * 1.55 &&
+        (next1.close > base.high || next2.close > base.high)
+      ) {
+        let broken = false;
+        for (let j = i + 2; j < len; j++) {
+          if (closedCandles[j].close < base.low) {
+            broken = true;
+            break;
+          }
+        }
+        const obTop = Math.max(base.open, base.close);
+        const obLow = base.low;
+        const distPct = ((obTop - safePrice) / safePrice) * 100;
+        if (!broken && obLow < safePrice && distPct <= 0.6 && distPct >= -6.5) {
+          const overlapsFvg = bullFvgs.some((f) => f.low <= obTop * 1.015 && f.high >= obLow * 0.99);
+          const entry = Math.min(obTop, safePrice);
+          bullishZones.push({
+            id: `bull-ob-${i}`,
+            side: 'LONG',
+            kind: 'OB',
+            label: overlapsFvg ? 'Bullish OB + FVG Confluence' : 'Bullish Order Block (Demand)',
+            zoneLow: roundSig(obLow),
+            zoneHigh: roundSig(obTop),
+            entryPrice: roundSig(entry),
+            invalidationPrice: roundSig(obLow - atr * 0.35),
+            distancePercent: Number((((entry - safePrice) / safePrice) * 100).toFixed(2)),
+            strength: overlapsFvg ? 95 : 88,
+            hasFvgConfluence: overlapsFvg,
+          });
+          bullObFound += 1;
+        }
+      }
+
+      // Bearish OB: bullish base candle followed by strong bearish displacement
+      if (
+        bearObFound < 2 &&
+        base.close > base.open &&
+        base.high - impulseLow >= atr * 1.55 &&
+        (next1.close < base.low || next2.close < base.low)
+      ) {
+        let broken = false;
+        for (let j = i + 2; j < len; j++) {
+          if (closedCandles[j].close > base.high) {
+            broken = true;
+            break;
+          }
+        }
+        const obBottom = Math.min(base.open, base.close);
+        const obHigh = base.high;
+        const distPct = ((obBottom - safePrice) / safePrice) * 100;
+        if (!broken && obHigh > safePrice && distPct >= -0.6 && distPct <= 6.5) {
+          const overlapsFvg = bearFvgs.some((f) => f.high >= obBottom * 0.985 && f.low <= obHigh * 1.01);
+          const entry = Math.max(obBottom, safePrice);
+          bearishZones.push({
+            id: `bear-ob-${i}`,
+            side: 'SHORT',
+            kind: 'OB',
+            label: overlapsFvg ? 'Bearish OB + FVG Confluence' : 'Bearish Order Block (Supply)',
+            zoneLow: roundSig(obBottom),
+            zoneHigh: roundSig(obHigh),
+            entryPrice: roundSig(entry),
+            invalidationPrice: roundSig(obHigh + atr * 0.35),
+            distancePercent: Number((((entry - safePrice) / safePrice) * 100).toFixed(2)),
+            strength: overlapsFvg ? 95 : 88,
+            hasFvgConfluence: overlapsFvg,
+          });
+          bearObFound += 1;
+        }
+      }
+
+      if (bullObFound >= 2 && bearObFound >= 2) break;
+    }
+  }
+
+  // 3. Fibonacci OTE Golden Pocket (0.618 - 0.705) on recent 45-bar swing leg
+  const swingSlice = closedCandles.slice(-45);
+  let swingHigh = safePrice;
+  let swingLow = safePrice;
+  let highIdx = 0;
+  let lowIdx = 0;
+
+  for (let i = 0; i < swingSlice.length; i++) {
+    if (swingSlice[i].high >= swingHigh) {
+      swingHigh = swingSlice[i].high;
+      highIdx = i;
+    }
+    if (swingSlice[i].low <= swingLow) {
+      swingLow = swingSlice[i].low;
+      lowIdx = i;
+    }
+  }
+
+  const swingRange = swingHigh - swingLow;
+  if (swingRange >= atr * 2.0) {
+    if (highIdx > lowIdx) {
+      const ote618 = swingHigh - swingRange * 0.618;
+      const ote705 = swingHigh - swingRange * 0.705;
+      const distPct = ((ote618 - safePrice) / safePrice) * 100;
+      if (ote618 < safePrice && distPct >= -7.0) {
+        bullishZones.push({
+          id: 'bull-ote',
+          side: 'LONG',
+          kind: 'OTE',
+          label: 'Fibonacci OTE Golden Pocket (0.618–0.705)',
+          zoneLow: roundSig(ote705),
+          zoneHigh: roundSig(ote618),
+          entryPrice: roundSig(ote618),
+          invalidationPrice: roundSig(swingLow - atr * 0.25),
+          distancePercent: Number(distPct.toFixed(2)),
+          strength: 80,
+        });
+      }
+    } else if (lowIdx > highIdx) {
+      const ote618 = swingLow + swingRange * 0.618;
+      const ote705 = swingLow + swingRange * 0.705;
+      const distPct = ((ote618 - safePrice) / safePrice) * 100;
+      if (ote618 > safePrice && distPct <= 7.0) {
+        bearishZones.push({
+          id: 'bear-ote',
+          side: 'SHORT',
+          kind: 'OTE',
+          label: 'Fibonacci OTE Golden Pocket (0.618–0.705)',
+          zoneLow: roundSig(ote618),
+          zoneHigh: roundSig(ote705),
+          entryPrice: roundSig(ote618),
+          invalidationPrice: roundSig(swingHigh + atr * 0.25),
+          distancePercent: Number(distPct.toFixed(2)),
+          strength: 80,
+        });
+      }
+    }
+  }
+
+  // 4. Dynamic S/R Flip & EMA20 / VWAP Pullback Fallback Zones (guarantees Limit Pullback never chases top/bottom)
+  const bullDynamicRef =
+    supports[0] && supports[0] < safePrice * 0.997 && (safePrice - supports[0]) / safePrice <= 0.045
+      ? {
+          kind: 'SR_FLIP' as PoiZoneKind,
+          label: 'Key Support / S-R Flip Retest',
+          entry: supports[0],
+          low: supports[0] - atr * 0.4,
+          high: supports[0] + atr * 0.15,
+          inv: supports[0] - atr * 0.9,
+          str: 76,
+        }
+      : {
+          kind: 'EMA_VWAP' as PoiZoneKind,
+          label: 'Pullback Dinamis EMA20 / VWAP',
+          entry: Math.min(ema20, vwap, safePrice - atr * 0.45),
+          low: Math.min(ema20, vwap, safePrice - atr * 0.45) - atr * 0.5,
+          high: Math.min(ema20, vwap, safePrice - atr * 0.45) + atr * 0.15,
+          inv: Math.min(ema20, vwap, safePrice - atr * 0.45) - atr * 1.35,
+          str: 70,
+        };
+
+  bullishZones.push({
+    id: 'bull-dynamic',
+    side: 'LONG',
+    kind: bullDynamicRef.kind,
+    label: bullDynamicRef.label,
+    zoneLow: roundSig(Math.max(bullDynamicRef.low, safePrice * 0.5)),
+    zoneHigh: roundSig(Math.min(bullDynamicRef.high, safePrice)),
+    entryPrice: roundSig(Math.max(bullDynamicRef.entry, safePrice * 0.6)),
+    invalidationPrice: roundSig(Math.max(bullDynamicRef.inv, safePrice * 0.45)),
+    distancePercent: Number((((bullDynamicRef.entry - safePrice) / safePrice) * 100).toFixed(2)),
+    strength: bullDynamicRef.str,
+  });
+
+  const bearDynamicRef =
+    resistances[0] &&
+    resistances[0] > safePrice * 1.003 &&
+    (resistances[0] - safePrice) / safePrice <= 0.045
+      ? {
+          kind: 'SR_FLIP' as PoiZoneKind,
+          label: 'Key Resistance / S-R Flip Retest',
+          entry: resistances[0],
+          low: resistances[0] - atr * 0.15,
+          high: resistances[0] + atr * 0.4,
+          inv: resistances[0] + atr * 0.9,
+          str: 76,
+        }
+      : {
+          kind: 'EMA_VWAP' as PoiZoneKind,
+          label: 'Pullback Dinamis EMA20 / VWAP',
+          entry: Math.max(ema20, vwap, safePrice + atr * 0.45),
+          low: Math.max(ema20, vwap, safePrice + atr * 0.45) - atr * 0.15,
+          high: Math.max(ema20, vwap, safePrice + atr * 0.45) + atr * 0.5,
+          inv: Math.max(ema20, vwap, safePrice + atr * 0.45) + atr * 1.35,
+          str: 70,
+        };
+
+  bearishZones.push({
+    id: 'bear-dynamic',
+    side: 'SHORT',
+    kind: bearDynamicRef.kind,
+    label: bearDynamicRef.label,
+    zoneLow: roundSig(Math.max(bearDynamicRef.low, safePrice)),
+    zoneHigh: roundSig(bearDynamicRef.high),
+    entryPrice: roundSig(bearDynamicRef.entry),
+    invalidationPrice: roundSig(bearDynamicRef.inv),
+    distancePercent: Number((((bearDynamicRef.entry - safePrice) / safePrice) * 100).toFixed(2)),
+    strength: bearDynamicRef.str,
+  });
+
+  // Sort zones by strength (favoring OB+FVG > OB > FVG > OTE > S/R > EMA) while penalizing overly distant zones
+  const rankPoi = (z: PoiZone) => z.strength - Math.abs(z.distancePercent) * 2.2;
+  bullishZones.sort((a, b) => rankPoi(b) - rankPoi(a));
+  bearishZones.sort((a, b) => rankPoi(b) - rankPoi(a));
+
+  // 5. Liquidity Sweep / Stop-Hunt Reclaim on last 4 closed bars
+  let liquiditySweep: PoiAnalysisResult['liquiditySweep'] = 'NONE';
+  if (len >= 26) {
+    const prior20 = closedCandles.slice(-24, -4);
+    const prev20Low = Math.min(...prior20.map((c) => c.low));
+    const prev20High = Math.max(...prior20.map((c) => c.high));
+    const recent4 = closedCandles.slice(-4);
+    for (const bar of recent4) {
+      const range = Math.max(bar.high - bar.low, 1e-9);
+      const lowerWick = Math.min(bar.open, bar.close) - bar.low;
+      const upperWick = bar.high - Math.max(bar.open, bar.close);
+      if (bar.low < prev20Low && bar.close > prev20Low && lowerWick / range >= 0.4) {
+        liquiditySweep = 'BULLISH_SWEEP';
+      } else if (bar.high > prev20High && bar.close < prev20High && upperWick / range >= 0.4) {
+        liquiditySweep = 'BEARISH_SWEEP';
+      }
+    }
+  }
+
+  return {
+    bullishZones: bullishZones.slice(0, 4),
+    bearishZones: bearishZones.slice(0, 4),
+    bestLongPoi: bullishZones[0],
+    bestShortPoi: bearishZones[0],
+    liquiditySweep,
+    swingHigh: roundSig(swingHigh),
+    swingLow: roundSig(swingLow),
+  };
+}
