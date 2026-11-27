@@ -29,6 +29,15 @@ interface PartialSellInput {
   note?: string;
 }
 
+interface EditHoldingInput {
+  holdingId: string;
+  quantity: number;
+  avgBuyPrice: number;
+  targetSellPrice: number;
+  adjustUsdtDiff?: boolean;
+  note?: string;
+}
+
 interface PortfolioState extends PortfolioPersistedData {
   setUsdtBalance: (amount: number, note?: string) => void;
   depositUsdt: (amount: number, note?: string) => void;
@@ -36,6 +45,7 @@ interface PortfolioState extends PortfolioPersistedData {
   setAutoDeductUsdtOnBuy: (enabled: boolean) => void;
   setAutoCreditUsdtOnSell: (enabled: boolean) => void;
   buyOrDcaSpot: (input: BuyDcaInput) => { ok: boolean; error?: string };
+  editHolding: (input: EditHoldingInput) => { ok: boolean; error?: string };
   partialSellSpot: (input: PartialSellInput) => { ok: boolean; realizedPnl?: number; error?: string };
   deleteHolding: (holdingId: string) => void;
   addActivityLog: (entry: Omit<ActivityLog, 'id'>) => void;
@@ -378,6 +388,76 @@ export const usePortfolioStore = create<PortfolioState>()(
         });
 
         return { ok: true, realizedPnl };
+      },
+
+      editHolding: (input) => {
+        const state = get();
+        const holding = state.holdings.find((h) => h.id === input.holdingId);
+        if (!holding) return { ok: false, error: 'Aset tidak ditemukan.' };
+        if (
+          !Number.isFinite(input.quantity) ||
+          input.quantity <= 0 ||
+          !Number.isFinite(input.avgBuyPrice) ||
+          input.avgBuyPrice <= 0
+        ) {
+          return { ok: false, error: 'Jumlah coin dan Average Buy Price harus lebih dari 0.' };
+        }
+
+        const newTotalCost = Number((input.quantity * input.avgBuyPrice).toFixed(4));
+        const costDiff = newTotalCost - holding.totalCostUsdt;
+        let nextUsdt = state.usdtBalance;
+
+        if (input.adjustUsdtDiff) {
+          if (costDiff > 0 && costDiff > state.usdtBalance + 0.01) {
+            return {
+              ok: false,
+              error: `Saldo kas USDT ($${state.usdtBalance.toFixed(2)}) tidak cukup untuk selisih tambah modal $${costDiff.toFixed(2)}.`,
+            };
+          }
+          nextUsdt = Math.max(0, Number((state.usdtBalance - costDiff).toFixed(2)));
+        }
+
+        const safeTarget =
+          Number.isFinite(input.targetSellPrice) && input.targetSellPrice > 0
+            ? input.targetSellPrice
+            : holding.targetSellPrice;
+        const now = Date.now();
+
+        const nextHoldings = state.holdings.map((h) =>
+          h.id === holding.id
+            ? {
+                ...h,
+                quantity: input.quantity,
+                avgBuyPrice: input.avgBuyPrice,
+                totalCostUsdt: newTotalCost,
+                targetSellPrice: safeTarget,
+                updatedAt: now,
+              }
+            : h,
+        );
+
+        const logEntry: ActivityLog = {
+          id: generateId('act'),
+          category: 'SPOT',
+          action: 'SPOT_EDIT',
+          symbol: holding.symbol,
+          baseAsset: holding.baseAsset,
+          quantity: input.quantity,
+          price: input.avgBuyPrice,
+          amountUsdt: Number(newTotalCost.toFixed(2)),
+          note:
+            input.note?.trim() ||
+            `Koreksi data ${holding.baseAsset}: Qty ${input.quantity}, Avg $${input.avgBuyPrice}`,
+          timestamp: now,
+        };
+
+        set({
+          holdings: nextHoldings,
+          usdtBalance: nextUsdt,
+          activityLogs: [logEntry, ...state.activityLogs],
+        });
+
+        return { ok: true };
       },
 
       deleteHolding: (holdingId) =>

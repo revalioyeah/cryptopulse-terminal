@@ -4,6 +4,7 @@ import {
   ArrowDownCircle,
   ArrowUpCircle,
   History,
+  Pencil,
   PieChart,
   Plus,
   RotateCcw,
@@ -22,6 +23,7 @@ import {
   formatUsd,
 } from '../utils/format';
 import { AllocationDonutChart } from '../components/portfolio/AllocationDonutChart';
+import { EditHoldingModal } from '../components/portfolio/EditHoldingModal';
 import { PortfolioPerfChart } from '../components/portfolio/PortfolioPerfChart';
 import { PartialSellModal } from '../components/portfolio/PartialSellModal';
 import { CoinSearchSelect } from '../components/ui/CoinSearchSelect';
@@ -47,7 +49,9 @@ export function PortfolioPage() {
   const setAutoDeductUsdtOnBuy = usePortfolioStore((s) => s.setAutoDeductUsdtOnBuy);
   const setAutoCreditUsdtOnSell = usePortfolioStore((s) => s.setAutoCreditUsdtOnSell);
   const buyOrDcaSpot = usePortfolioStore((s) => s.buyOrDcaSpot);
+  const editHolding = usePortfolioStore((s) => s.editHolding);
   const partialSellSpot = usePortfolioStore((s) => s.partialSellSpot);
+  const deleteHolding = usePortfolioStore((s) => s.deleteHolding);
   const recordSnapshot = usePortfolioStore((s) => s.recordSnapshot);
   const resetPortfolio = usePortfolioStore((s) => s.resetPortfolio);
 
@@ -68,8 +72,9 @@ export function PortfolioPage() {
   const [buyPriceEdited, setBuyPriceEdited] = useState(false);
   const [buyNote, setBuyNote] = useState('');
 
-  // Sell Modal, Reset Modal & History Filter
+  // Sell Modal, Edit Modal, Reset Modal & History Filter
   const [sellTarget, setSellTarget] = useState<SpotHolding | null>(null);
+  const [editTarget, setEditTarget] = useState<SpotHolding | null>(null);
   const [resetModalOpen, setResetModalOpen] = useState(false);
   const [resetStartUsdt, setResetStartUsdt] = useState<string>('0');
   const [resetClearFutures, setResetClearFutures] = useState<boolean>(true);
@@ -656,23 +661,31 @@ export function PortfolioPage() {
                     </div>
                   </div>
 
-                  <div className="mt-3 grid grid-cols-2 gap-2">
+                  <div className="mt-3 grid grid-cols-3 gap-2">
                     <button
                       type="button"
                       onClick={() => {
                         handleSelectBuyCoin(item.symbol);
                         document.getElementById('spot-dca-form')?.scrollIntoView({ behavior: 'smooth' });
                       }}
-                      className="min-h-[40px] rounded-lg border border-[#2B3139] bg-[#161A1E] text-xs font-semibold text-[#F0B90B] hover:border-[#F0B90B]/60"
+                      className="min-h-[40px] rounded-lg border border-[#2B3139] bg-[#161A1E] px-2 text-xs font-semibold text-[#F0B90B] hover:border-[#F0B90B]/60"
                     >
-                      +DCA {item.baseAsset}
+                      +DCA
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditTarget(item)}
+                      className="inline-flex min-h-[40px] items-center justify-center gap-1 rounded-lg border border-[#2B3139] bg-[#161A1E] px-2 text-xs font-semibold text-[#EAECEF] hover:border-[#F0B90B]/60 hover:text-[#F0B90B]"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit
                     </button>
                     <button
                       type="button"
                       onClick={() => setSellTarget(item)}
-                      className="min-h-[40px] rounded-lg bg-[#00C087]/15 text-xs font-semibold text-[#00C087] hover:bg-[#00C087] hover:text-[#0B0E11]"
+                      className="min-h-[40px] rounded-lg bg-[#00C087]/15 px-2 text-xs font-semibold text-[#00C087] hover:bg-[#00C087] hover:text-[#0B0E11]"
                     >
-                      Jual / TP Parsial
+                      Jual / TP
                     </button>
                   </div>
                 </div>
@@ -774,6 +787,31 @@ export function PortfolioPage() {
         livePrice={sellTarget ? (coinsMap[sellTarget.symbol]?.price ?? sellTarget.avgBuyPrice) : 0}
         onClose={() => setSellTarget(null)}
         onConfirmSell={handleConfirmSell}
+      />
+
+      <EditHoldingModal
+        holding={editTarget}
+        livePrice={editTarget ? (coinsMap[editTarget.symbol]?.price ?? editTarget.avgBuyPrice) : 0}
+        onClose={() => setEditTarget(null)}
+        onSave={(payload) => {
+          const res = editHolding(payload);
+          if (!res.ok) {
+            pushToast('Gagal Menyimpan Perubahan', res.error, 'error');
+            return;
+          }
+          const label = editTarget?.baseAsset ?? 'Aset';
+          setEditTarget(null);
+          pushToast(
+            `Data ${label} Diperbarui`,
+            `Qty ${formatQty(payload.quantity)} · Avg ${formatPrice(payload.avgBuyPrice)} · TP ${formatPrice(payload.targetSellPrice)}`,
+            'success',
+          );
+        }}
+        onDelete={(holding) => {
+          deleteHolding(holding.id);
+          setEditTarget(null);
+          pushToast('Aset Dihapus', `${holding.baseAsset} dihapus dari daftar aset Spot.`, 'info');
+        }}
       />
 
       <Modal

@@ -17,6 +17,7 @@ export type ActivityCategory = 'SPOT' | 'FUTURES' | 'USDT_CASH';
 export type ActivityAction =
   | 'SPOT_BUY'
   | 'SPOT_DCA'
+  | 'SPOT_EDIT'
   | 'SPOT_SELL_TP'
   | 'USDT_DEPOSIT'
   | 'USDT_WITHDRAW'
