@@ -70,9 +70,11 @@ export interface MacroEvent {
   title: string;
   category: MacroEventCategory;
   impact: MacroImpact;
-  timestamp: number; // Unix ms
+  timestamp: number; // Unix ms (official UTC schedule)
   description: string;
+  source: string;
   symbol?: string;
+  unlockTokenAmount?: number;
   unlockUsdValue?: number;
   unlockSupplyPercent?: number;
 }

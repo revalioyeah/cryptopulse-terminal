@@ -86,7 +86,7 @@ export function DashboardPage() {
 
       <TopMovers coins={coins} onSelectCoin={openAnalysis} />
 
-      <MacroCalendar onSelectCoin={openAnalysis} />
+      <MacroCalendar coinsMap={coinsMap} onSelectCoin={openAnalysis} />
     </div>
   );
 }

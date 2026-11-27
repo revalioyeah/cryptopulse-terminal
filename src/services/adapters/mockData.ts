@@ -3,7 +3,6 @@ import type {
   Coin,
   FearGreedData,
   GlobalMarketData,
-  MacroEvent,
   SectorName,
   Timeframe,
 } from '../../types';
@@ -301,70 +300,4 @@ export function generateFallbackCandles(
     close: Number((bar.close * scale).toPrecision(7)),
     volume: Number(bar.volume.toFixed(2)),
   }));
-}
-
-export function getMacroAndUnlockEvents(): MacroEvent[] {
-  const now = Date.now();
-  const HOUR = 3_600_000;
-  const DAY = 24 * HOUR;
-
-  return [
-    {
-      id: 'macro-cpi',
-      title: 'US CPI Inflation Release (YoY & Core)',
-      category: 'CPI',
-      impact: 'High',
-      timestamp: now + 1 * DAY + 14 * HOUR + 25 * 60_000,
-      description: 'Volatilitas tinggi pada BTC & DXY. Perketat manajemen risiko & SL menjelang rilis.',
-    },
-    {
-      id: 'unlock-sui',
-      title: 'SUI Cliff Token Unlock',
-      category: 'Token Unlock',
-      impact: 'High',
-      symbol: 'SUIUSDT',
-      unlockUsdValue: 248_000_000,
-      unlockSupplyPercent: 2.13,
-      timestamp: now + 2 * DAY + 6 * HOUR,
-      description: '64.19M SUI dialokasikan untuk Series A/B & Early Contributors.',
-    },
-    {
-      id: 'macro-fomc',
-      title: 'FOMC Interest Rate Decision & Powell Speech',
-      category: 'FOMC',
-      impact: 'High',
-      timestamp: now + 4 * DAY + 19 * HOUR,
-      description: 'Keputusan suku bunga The Fed dan konferensi pers proyeksi likuiditas kuartal berikutnya.',
-    },
-    {
-      id: 'unlock-arb',
-      title: 'ARB Team & Advisors Unlock',
-      category: 'Token Unlock',
-      impact: 'Medium',
-      symbol: 'ARBUSDT',
-      unlockUsdValue: 82_600_000,
-      unlockSupplyPercent: 2.26,
-      timestamp: now + 6 * DAY + 9 * HOUR,
-      description: '92.65M ARB terbuka untuk tim inti & penasihat ekosistem.',
-    },
-    {
-      id: 'macro-pce',
-      title: 'US Core PCE Price Index',
-      category: 'PCE',
-      impact: 'High',
-      timestamp: now + 9 * DAY + 13 * HOUR + 30 * 60_000,
-      description: 'Indikator inflasi acuan utama The Fed yang memengaruhi sentimen risk-on kripto.',
-    },
-    {
-      id: 'unlock-apt',
-      title: 'APT Monthly Supply Unlock',
-      category: 'Token Unlock',
-      impact: 'Medium',
-      symbol: 'APTUSDT',
-      unlockUsdValue: 132_400_000,
-      unlockSupplyPercent: 2.08,
-      timestamp: now + 11 * DAY + 4 * HOUR,
-      description: '11.31M APT dibuka untuk Foundation, Community, dan Core Contributors.',
-    },
-  ];
 }

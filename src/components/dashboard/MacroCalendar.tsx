@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, LockOpen } from 'lucide-react';
-import { getMacroAndUnlockEvents } from '../../services/adapters/mockData';
+import { CalendarClock, LockOpen, ShieldCheck } from 'lucide-react';
+import type { Coin } from '../../types';
+import { getMacroAndUnlockEvents } from '../../services/adapters/calendarAdapter';
 import { formatCompactUsd, formatCountdown, formatDateTime } from '../../utils/format';
 
 interface MacroCalendarProps {
+  coinsMap: Record<string, Coin>;
   onSelectCoin: (symbol: string) => void;
 }
 
-export function MacroCalendar({ onSelectCoin }: MacroCalendarProps) {
-  const events = useMemo(() => getMacroAndUnlockEvents(), []);
+export function MacroCalendar({ coinsMap, onSelectCoin }: MacroCalendarProps) {
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
   useEffect(() => {
@@ -18,21 +19,43 @@ export function MacroCalendar({ onSelectCoin }: MacroCalendarProps) {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Re-evaluate upcoming official schedules each minute so passed events roll over automatically
+  const minuteBucket = Math.floor(nowMs / 60_000);
+  const events = useMemo(
+    () => getMacroAndUnlockEvents(minuteBucket * 60_000),
+    [minuteBucket],
+  );
+
   return (
     <section aria-label="Macro dan Token Unlock Calendar" className="cp-card p-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <CalendarClock className="h-4 w-4 text-[#F0B90B]" />
           <h2 className="text-sm font-semibold text-[#EAECEF]">
             Macro &amp; Token Unlock Calendar
           </h2>
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#00C087]/30 bg-[#00C087]/10 px-2 py-0.5 text-[10px] font-medium text-[#00C087]">
+            <ShieldCheck className="h-3 w-3" />
+            Jadwal Resmi + Harga Live
+          </span>
         </div>
-        <span className="text-xs text-[#848E9C]">FOMC · CPI · PCE · Major Unlocks</span>
+        <span className="text-xs text-[#848E9C]">
+          Fed · BLS · BEA · Tokenomist (Waktu Lokal)
+        </span>
       </div>
 
       <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
         {events.map((ev) => {
           const isUnlock = ev.category === 'Token Unlock';
+          const liveCoin = ev.symbol ? coinsMap[ev.symbol] : undefined;
+          const isLivePriced = Boolean(
+            isUnlock && ev.unlockTokenAmount && liveCoin && liveCoin.price > 0,
+          );
+          const unlockUsdValue =
+            isLivePriced && ev.unlockTokenAmount && liveCoin
+              ? ev.unlockTokenAmount * liveCoin.price
+              : ev.unlockUsdValue;
+
           return (
             <div
               key={ev.id}
@@ -40,7 +63,7 @@ export function MacroCalendar({ onSelectCoin }: MacroCalendarProps) {
             >
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span
                       className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-semibold ${
                         isUnlock
@@ -61,7 +84,7 @@ export function MacroCalendar({ onSelectCoin }: MacroCalendarProps) {
                       {ev.impact} Impact
                     </span>
                   </div>
-                  <span className="font-mono tabular-nums text-[11px] text-[#848E9C]">
+                  <span className="shrink-0 font-mono tabular-nums text-[11px] text-[#848E9C]">
                     {formatDateTime(ev.timestamp)}
                   </span>
                 </div>
@@ -71,30 +94,44 @@ export function MacroCalendar({ onSelectCoin }: MacroCalendarProps) {
               </div>
 
               <div className="mt-3 flex items-center justify-between gap-2 border-t border-[#2B3139] pt-2.5">
-                <div>
+                <div className="min-w-0">
                   <span className="block text-[10px] uppercase tracking-wider text-[#5E6673]">
                     Countdown
                   </span>
                   <span className="font-mono tabular-nums text-sm font-bold text-[#F0B90B]">
                     {formatCountdown(ev.timestamp, nowMs)}
                   </span>
+                  <span className="block truncate text-[10px] text-[#5E6673]">
+                    Sumber: {ev.source}
+                  </span>
                 </div>
 
-                {ev.symbol && ev.unlockUsdValue ? (
+                {ev.symbol && unlockUsdValue !== undefined && unlockUsdValue > 0 ? (
                   <button
                     type="button"
                     onClick={() => onSelectCoin(ev.symbol!)}
-                    className="min-h-[40px] rounded-lg border border-[#2B3139] bg-[#161A1E] px-2.5 py-1 text-right transition hover:border-[#F0B90B]/60"
+                    className="min-h-[40px] shrink-0 rounded-lg border border-[#2B3139] bg-[#161A1E] px-2.5 py-1 text-right transition hover:border-[#F0B90B]/60"
                   >
-                    <span className="font-mono tabular-nums block text-xs font-semibold text-[#EAECEF]">
-                      {formatCompactUsd(ev.unlockUsdValue)}
+                    <span className="flex items-center justify-end gap-1.5 font-mono tabular-nums text-xs font-semibold text-[#EAECEF]">
+                      {isLivePriced && (
+                        <span
+                          className="h-1.5 w-1.5 rounded-full bg-[#00C087]"
+                          title="Valuasi dihitung otomatis dari harga live Binance"
+                        />
+                      )}
+                      {formatCompactUsd(unlockUsdValue)}
                     </span>
                     <span className="font-mono tabular-nums text-[10px] text-[#848E9C]">
                       {ev.unlockSupplyPercent?.toFixed(2)}% supply · Analisa →
                     </span>
                   </button>
                 ) : (
-                  <span className="text-[11px] font-medium text-[#848E9C]">USD Macro Event</span>
+                  <div className="shrink-0 text-right">
+                    <span className="block text-[11px] font-medium text-[#EAECEF]">
+                      USD Macro Event
+                    </span>
+                    <span className="text-[10px] text-[#848E9C]">Jadwal Resmi AS</span>
+                  </div>
                 )}
               </div>
             </div>
