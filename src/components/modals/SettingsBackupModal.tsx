@@ -5,10 +5,14 @@ import {
   Download,
   Eye,
   EyeOff,
+  Search,
   Send,
   Upload,
 } from 'lucide-react';
-import { testTelegramConnection } from '../../services/adapters/telegramAdapter';
+import {
+  detectTelegramChatId,
+  testTelegramConnection,
+} from '../../services/adapters/telegramAdapter';
 import {
   downloadBackupJson,
   restoreBackupPayload,
@@ -52,6 +56,7 @@ export function SettingsBackupModal() {
   const [activeTab, setActiveTab] = useState<'TELEGRAM' | 'BACKUP'>('TELEGRAM');
   const [showToken, setShowToken] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [detecting, setDetecting] = useState(false);
   const [previewType, setPreviewType] = useState<FormatterTab>('FUTURES');
   const [includeSecrets, setIncludeSecrets] = useState(true);
 
@@ -61,6 +66,21 @@ export function SettingsBackupModal() {
   } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleDetectChatId = async () => {
+    setDetecting(true);
+    try {
+      const res = await detectTelegramChatId(telegramConfig.botToken);
+      if (res.ok && res.chatId) {
+        updateTelegramConfig({ chatId: res.chatId });
+        pushToast('Chat ID Ditemukan', res.message, 'success');
+      } else {
+        pushToast('Chat ID Belum Terdeteksi', res.message, 'warning');
+      }
+    } finally {
+      setDetecting(false);
+    }
+  };
 
   const handleTestTelegram = async () => {
     setTesting(true);
@@ -276,14 +296,38 @@ export function SettingsBackupModal() {
                 </div>
 
                 <div>
-                  <label className="mb-1 block text-xs text-[#848E9C]">Chat ID / Channel ID</label>
-                  <input
-                    type="text"
-                    value={telegramConfig.chatId}
-                    onChange={(e) => updateTelegramConfig({ chatId: e.target.value })}
-                    placeholder="-1001234567890 atau 987654321"
-                    className="font-mono min-h-[42px] w-full rounded-xl border border-[#2B3139] bg-[#0B0E11] px-3 text-xs text-[#EAECEF]"
-                  />
+                  <label className="mb-1 block text-xs text-[#848E9C]">
+                    Chat ID Tujuan (Angka Akun / Channel)
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      value={telegramConfig.chatId}
+                      onChange={(e) => updateTelegramConfig({ chatId: e.target.value })}
+                      placeholder="987654321 atau -100..."
+                      className="font-mono min-h-[42px] min-w-0 flex-1 rounded-xl border border-[#2B3139] bg-[#0B0E11] px-3 text-xs text-[#EAECEF]"
+                    />
+                    <button
+                      type="button"
+                      disabled={detecting}
+                      onClick={() => void handleDetectChatId()}
+                      title="Kirim /start ke bot Anda di Telegram lalu klik Deteksi"
+                      className="inline-flex min-h-[42px] shrink-0 items-center gap-1 rounded-xl border border-[#F0B90B]/50 bg-[#F0B90B]/15 px-3 text-xs font-semibold text-[#F0B90B] transition hover:bg-[#F0B90B] hover:text-[#0B0E11] disabled:opacity-60"
+                    >
+                      <Search className="h-3.5 w-3.5" />
+                      <span>{detecting ? '...' : 'Deteksi'}</span>
+                    </button>
+                  </div>
+                  {/^@.+bot$/i.test(telegramConfig.chatId.trim()) ? (
+                    <p className="mt-1 text-[11px] text-[#F6465D]">
+                      Jangan isi username bot. Kirim /start ke bot Anda di Telegram lalu klik{' '}
+                      <strong>Deteksi</strong>.
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-[#5E6673]">
+                      Kirim <code>/start</code> ke bot Anda di Telegram, lalu klik <strong>Deteksi</strong>.
+                    </p>
+                  )}
                 </div>
               </div>
 

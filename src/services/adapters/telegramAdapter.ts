@@ -5,6 +5,27 @@ export interface TelegramSendResult {
   message: string;
 }
 
+export interface TelegramDetectChatResult {
+  ok: boolean;
+  chatId?: string;
+  chatLabel?: string;
+  message: string;
+}
+
+interface TelegramChatInfo {
+  id: number;
+  type?: string;
+  username?: string;
+  first_name?: string;
+  title?: string;
+}
+
+interface TelegramUpdateItem {
+  message?: { chat?: TelegramChatInfo };
+  channel_post?: { chat?: TelegramChatInfo };
+  my_chat_member?: { chat?: TelegramChatInfo };
+}
+
 export async function sendTelegramHtmlMessage(
   config: Pick<TelegramConfig, 'botToken' | 'chatId'>,
   htmlText: string,
@@ -16,6 +37,14 @@ export async function sendTelegramHtmlMessage(
     return {
       ok: false,
       message: 'Bot Token atau Chat ID Telegram belum diisi di Settings.',
+    };
+  }
+
+  if (/^@.+bot$/i.test(chatId)) {
+    return {
+      ok: false,
+      message:
+        'Chat ID tidak boleh berupa username bot (@...bot). Isi Chat ID angka akun Anda (atau klik "Deteksi Chat ID" setelah mengirim /start ke bot).',
     };
   }
 
@@ -45,6 +74,65 @@ export async function sendTelegramHtmlMessage(
     }
 
     return { ok: true, message: 'Pesan berhasil dikirim ke Telegram.' };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Gagal menghubungi Telegram API';
+    return { ok: false, message: msg };
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+export async function detectTelegramChatId(botToken: string): Promise<TelegramDetectChatResult> {
+  const token = botToken.trim();
+  if (!token) {
+    return { ok: false, message: 'Isi Telegram Bot Token dari @BotFather terlebih dahulu.' };
+  }
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const url = `https://api.telegram.org/bot${encodeURIComponent(token)}/getUpdates?limit=20`;
+    const res = await fetch(url, { signal: controller.signal });
+    const data = (await res.json()) as {
+      ok?: boolean;
+      description?: string;
+      result?: TelegramUpdateItem[];
+    };
+
+    if (!res.ok || !data.ok) {
+      return {
+        ok: false,
+        message: data.description || `Gagal membaca getUpdates (HTTP ${res.status})`,
+      };
+    }
+
+    const updates = data.result ?? [];
+    for (let i = updates.length - 1; i >= 0; i--) {
+      const chat =
+        updates[i].message?.chat ??
+        updates[i].channel_post?.chat ??
+        updates[i].my_chat_member?.chat;
+      if (chat && typeof chat.id === 'number') {
+        const label =
+          chat.title ||
+          (chat.username ? `@${chat.username}` : chat.first_name) ||
+          chat.type ||
+          'Telegram Chat';
+        return {
+          ok: true,
+          chatId: String(chat.id),
+          chatLabel: label,
+          message: `Chat ID ditemukan: ${chat.id} (${label})`,
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      message:
+        'Belum ada pesan masuk ke bot. Buka bot Anda di Telegram, klik START (atau kirim pesan "halo"), lalu klik Deteksi lagi.',
+    };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Gagal menghubungi Telegram API';
     return { ok: false, message: msg };

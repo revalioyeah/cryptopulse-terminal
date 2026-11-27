@@ -238,12 +238,20 @@ export function useAutoScanner() {
           }
         }
 
-        if (config.autoSendTelegram && settingsState.telegramConfig.botToken && settingsState.telegramConfig.chatId) {
+        const shouldAutoSend =
+          (config.autoSendTelegram ||
+            (settingsState.telegramConfig.enabled && settingsState.telegramConfig.autoSendScanner)) &&
+          Boolean(settingsState.telegramConfig.botToken && settingsState.telegramConfig.chatId);
+
+        if (shouldAutoSend) {
           const res = await sendTelegramHtmlMessage(
             settingsState.telegramConfig,
             formatAutoScannerTelegram(newLog),
           );
           newLog.telegramSent = res.ok;
+          if (!res.ok) {
+            appState.pushToast('Auto-Kirim Telegram Gagal', res.message, 'error');
+          }
         }
 
         useTradingStore.getState().setSymbolCooldown(coin.symbol, now);
