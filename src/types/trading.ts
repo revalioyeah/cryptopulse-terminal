@@ -340,6 +340,9 @@ export interface DerivativesSnapshot {
   openInterestChange24h: number;
   longRatioPercent: number;
   shortRatioPercent: number;
+  source: string;
+  longShortAvailable: boolean;
+  oiChangeAvailable: boolean;
   isMock: boolean;
 }
 

@@ -12,6 +12,7 @@ import { MacroCalendar } from '../components/dashboard/MacroCalendar';
 export function DashboardPage() {
   const coins = useAppStore((s) => s.coins);
   const coinsMap = useAppStore((s) => s.coinsMap);
+  const marketSource = useAppStore((s) => s.marketSource);
   const openAnalysis = useAppStore((s) => s.openAnalysis);
   const openScreenerForSector = useAppStore((s) => s.openScreenerForSector);
   const openPriceAlertsModal = useAppStore((s) => s.openPriceAlertsModal);
@@ -46,9 +47,22 @@ export function DashboardPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl font-bold tracking-tight text-[#EAECEF] sm:text-2xl">
-            Market Overview
-          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl font-bold tracking-tight text-[#EAECEF] sm:text-2xl">
+              Market Overview
+            </h1>
+            {marketSource === 'live' && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-[#00C087]/15 px-2 py-0.5 text-[10px] font-bold text-[#00C087]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#00C087]" />
+                {coins.length} PAIR BINANCE LIVE
+              </span>
+            )}
+            {marketSource === 'fallback' && (
+              <span className="inline-flex items-center gap-1 rounded-md bg-[#F0B90B]/15 px-2 py-0.5 text-[10px] font-bold text-[#F0B90B]">
+                MODE CACHE OFFLINE
+              </span>
+            )}
+          </div>
           <p className="mt-0.5 text-xs text-[#848E9C]">
             Intelijen pasar real-time, rotasi narasi 24 jam, dan kalender katalis makro.
           </p>
@@ -71,22 +85,35 @@ export function DashboardPage() {
       <GlobalKpiCards
         globalData={globalData}
         fearGreed={fearGreed}
-        isLoading={globalQuery.isLoading && !globalQuery.data}
+        isLoading={(globalQuery.isLoading && !globalQuery.data) || (fgQuery.isLoading && !fgQuery.data)}
       />
 
-      <SectorHeatmap coins={coins} onSelectSector={openScreenerForSector} />
+      {marketSource === 'loading' ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {[0, 1, 2].map((i) => (
+            <div
+              key={i}
+              className="h-32 animate-pulse rounded-xl border border-[#2B3139] bg-[#161A1E]"
+            />
+          ))}
+        </div>
+      ) : (
+        <>
+          <SectorHeatmap coins={coins} onSelectSector={openScreenerForSector} />
 
-      <WatchlistStrip
-        watchlistSymbols={watchlist}
-        coinsMap={coinsMap}
-        onOpenAnalysis={openAnalysis}
-        onOpenAlert={(sym) => openPriceAlertsModal(sym)}
-        onToggleWatchlist={handleToggleWatchlist}
-      />
+          <WatchlistStrip
+            watchlistSymbols={watchlist}
+            coinsMap={coinsMap}
+            onOpenAnalysis={openAnalysis}
+            onOpenAlert={(sym) => openPriceAlertsModal(sym)}
+            onToggleWatchlist={handleToggleWatchlist}
+          />
 
-      <TopMovers coins={coins} onSelectCoin={openAnalysis} />
+          <TopMovers coins={coins} onSelectCoin={openAnalysis} />
 
-      <MacroCalendar coinsMap={coinsMap} onSelectCoin={openAnalysis} />
+          <MacroCalendar coinsMap={coinsMap} onSelectCoin={openAnalysis} />
+        </>
+      )}
     </div>
   );
 }

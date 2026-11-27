@@ -39,6 +39,7 @@ interface EditHoldingInput {
 }
 
 interface PortfolioState extends PortfolioPersistedData {
+  demoCleanedV2?: boolean;
   setUsdtBalance: (amount: number, note?: string) => void;
   depositUsdt: (amount: number, note?: string) => void;
   withdrawUsdt: (amount: number, note?: string) => boolean;
@@ -54,141 +55,19 @@ interface PortfolioState extends PortfolioPersistedData {
   hydratePortfolio: (data: Partial<PortfolioPersistedData>) => void;
 }
 
-const nowMs = Date.now();
-const daySec = 86400;
-const nowSec = Math.floor(nowMs / 1000);
-
-const SEEDED_HOLDINGS: SpotHolding[] = [
-  {
-    id: 'hold_btc',
-    symbol: 'BTCUSDT',
-    baseAsset: 'BTC',
-    name: 'Bitcoin',
-    quantity: 0.055,
-    avgBuyPrice: 56400,
-    totalCostUsdt: 3102,
-    targetSellPrice: 74000,
-    realizedPnlUsdt: 310.5,
-    updatedAt: nowMs - 5 * 86_400_000,
-  },
-  {
-    id: 'hold_sol',
-    symbol: 'SOLUSDT',
-    baseAsset: 'SOL',
-    name: 'Solana',
-    quantity: 18,
-    avgBuyPrice: 64.5,
-    totalCostUsdt: 1161,
-    targetSellPrice: 98.0,
-    realizedPnlUsdt: 185.0,
-    updatedAt: nowMs - 3 * 86_400_000,
-  },
-  {
-    id: 'hold_tao',
-    symbol: 'TAOUSDT',
-    baseAsset: 'TAO',
-    name: 'Bittensor',
-    quantity: 4.5,
-    avgBuyPrice: 164.0,
-    totalCostUsdt: 738,
-    targetSellPrice: 245.0,
-    realizedPnlUsdt: 0,
-    updatedAt: nowMs - 2 * 86_400_000,
-  },
-];
-
-const SEEDED_SNAPSHOTS: PortfolioSnapshot[] = [
-  { time: nowSec - 14 * daySec, totalValueUsdt: 7120, coinValueUsdt: 4320, usdtBalance: 2800 },
-  { time: nowSec - 12 * daySec, totalValueUsdt: 7265, coinValueUsdt: 4465, usdtBalance: 2800 },
-  { time: nowSec - 10 * daySec, totalValueUsdt: 7190, coinValueUsdt: 4690, usdtBalance: 2500 },
-  { time: nowSec - 8 * daySec, totalValueUsdt: 7410, coinValueUsdt: 4910, usdtBalance: 2500 },
-  { time: nowSec - 6 * daySec, totalValueUsdt: 7590, coinValueUsdt: 5090, usdtBalance: 2500 },
-  { time: nowSec - 4 * daySec, totalValueUsdt: 7740, coinValueUsdt: 5240, usdtBalance: 2500 },
-  { time: nowSec - 2 * daySec, totalValueUsdt: 7915, coinValueUsdt: 5415, usdtBalance: 2500 },
-  { time: nowSec - 1 * daySec, totalValueUsdt: 8020, coinValueUsdt: 5520, usdtBalance: 2500 },
-];
-
-const SEEDED_LOGS: ActivityLog[] = [
-  {
-    id: 'act_seed_1',
-    category: 'USDT_CASH',
-    action: 'USDT_DEPOSIT',
-    amountUsdt: 9500,
-    note: 'Deposit modal awal spot & cadangan DCA',
-    timestamp: nowMs - 14 * 86_400_000,
-  },
-  {
-    id: 'act_seed_2',
-    category: 'SPOT',
-    action: 'SPOT_BUY',
-    symbol: 'BTCUSDT',
-    baseAsset: 'BTC',
-    quantity: 0.045,
-    price: 86200,
-    amountUsdt: 3879,
-    note: 'Akumulasi Core BTC Layer 1',
-    timestamp: nowMs - 10 * 86_400_000,
-  },
-  {
-    id: 'act_seed_3',
-    category: 'SPOT',
-    action: 'SPOT_BUY',
-    symbol: 'SOLUSDT',
-    baseAsset: 'SOL',
-    quantity: 9.5,
-    price: 184,
-    amountUsdt: 1748,
-    note: 'Akumulasi SOL support harian',
-    timestamp: nowMs - 6 * 86_400_000,
-  },
-  {
-    id: 'act_seed_4',
-    category: 'SPOT',
-    action: 'SPOT_SELL_TP',
-    symbol: 'BTCUSDT',
-    baseAsset: 'BTC',
-    quantity: 0.015,
-    price: 93800,
-    amountUsdt: 1407,
-    pnlUsdt: 310.5,
-    note: 'Take Profit parsial 25% di resistance',
-    timestamp: nowMs - 4 * 86_400_000,
-  },
-  {
-    id: 'act_seed_5',
-    category: 'FUTURES',
-    action: 'FUTURES_HIT_TP',
-    symbol: 'SOLUSDT',
-    baseAsset: 'SOL',
-    price: 221.5,
-    amountUsdt: 3246,
-    pnlUsdt: 218.4,
-    note: 'Futures LONG SOLUSDT Hit TP2 (R:R 2.70)',
-    timestamp: nowMs - 18 * 3_600_000,
-  },
-  {
-    id: 'act_seed_6',
-    category: 'FUTURES',
-    action: 'FUTURES_HIT_SL',
-    symbol: 'WIFUSDT',
-    baseAsset: 'WIF',
-    price: 3.06,
-    amountUsdt: 1837.5,
-    pnlUsdt: -75,
-    note: 'Futures SHORT WIFUSDT Hit SL (-0.75% equity)',
-    timestamp: nowMs - 22 * 3_600_000,
-  },
-];
+const LEGACY_DEMO_HOLDING_IDS = new Set(['hold_btc', 'hold_sol', 'hold_tao']);
+const LEGACY_DEMO_LOG_PREFIX = 'act_seed_';
 
 export const usePortfolioStore = create<PortfolioState>()(
   persist(
     (set, get) => ({
-      usdtBalance: 2500,
+      usdtBalance: 0,
       autoDeductUsdtOnBuy: true,
       autoCreditUsdtOnSell: true,
-      holdings: SEEDED_HOLDINGS,
-      activityLogs: SEEDED_LOGS,
-      snapshots: SEEDED_SNAPSHOTS,
+      holdings: [],
+      activityLogs: [],
+      snapshots: [],
+      demoCleanedV2: true,
 
       setUsdtBalance: (amount, note) => {
         const safe = Math.max(0, Number(amount.toFixed(2)));
@@ -564,6 +443,58 @@ export const usePortfolioStore = create<PortfolioState>()(
     }),
     {
       name: 'cryptopulse-portfolio-v1',
+      version: 2,
+      migrate: (persistedState) => {
+        const persisted = (persistedState ?? {}) as Partial<PortfolioState>;
+        const rawHoldings = Array.isArray(persisted.holdings) ? persisted.holdings : [];
+        const rawLogs = Array.isArray(persisted.activityLogs) ? persisted.activityLogs : [];
+        const hasUserLogs = rawLogs.some((l) => !l.id.startsWith(LEGACY_DEMO_LOG_PREFIX));
+        const hasUserHoldings = rawHoldings.some((h) => !LEGACY_DEMO_HOLDING_IDS.has(h.id));
+
+        if (!hasUserLogs && !hasUserHoldings && (rawHoldings.length > 0 || rawLogs.length > 0)) {
+          return {
+            ...persisted,
+            usdtBalance: 0,
+            holdings: [],
+            activityLogs: [],
+            snapshots: [],
+            demoCleanedV2: true,
+          };
+        }
+
+        return {
+          ...persisted,
+          demoCleanedV2: true,
+        };
+      },
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<PortfolioState>;
+        if (!persisted.demoCleanedV2) {
+          const rawHoldings = Array.isArray(persisted.holdings) ? persisted.holdings : [];
+          const rawLogs = Array.isArray(persisted.activityLogs) ? persisted.activityLogs : [];
+          const hasUserLogs = rawLogs.some((l) => !l.id.startsWith(LEGACY_DEMO_LOG_PREFIX));
+          const hasUserHoldings = rawHoldings.some((h) => !LEGACY_DEMO_HOLDING_IDS.has(h.id));
+
+          // If the user has never edited/added real portfolio data, clear the old prototype seed cleanly
+          if (!hasUserLogs && !hasUserHoldings && (rawHoldings.length > 0 || rawLogs.length > 0)) {
+            return {
+              ...currentState,
+              ...persisted,
+              usdtBalance: 0,
+              holdings: [],
+              activityLogs: [],
+              snapshots: [],
+              demoCleanedV2: true,
+            };
+          }
+        }
+
+        return {
+          ...currentState,
+          ...persisted,
+          demoCleanedV2: true,
+        };
+      },
     },
   ),
 );

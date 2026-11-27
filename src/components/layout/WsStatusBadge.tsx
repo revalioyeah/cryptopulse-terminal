@@ -32,8 +32,8 @@ export function WsStatusBadge({ status, compact = false }: WsStatusBadgeProps) {
     fallback: {
       dot: 'bg-[#F0B90B]',
       text: 'text-[#F0B90B]',
-      label: 'Simulated Live Feed',
-      shortLabel: 'SIM',
+      label: 'Binance REST Live',
+      shortLabel: 'REST',
       Icon: WifiOff,
     },
   }[status];

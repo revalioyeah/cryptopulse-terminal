@@ -133,19 +133,25 @@ export function GlobalKpiCards({ globalData, fearGreed, isLoading }: GlobalKpiCa
         </div>
 
         <div className="mt-2.5 flex items-baseline gap-2">
-          <p className="font-mono tabular-nums text-2xl font-bold tracking-tight text-[#EAECEF]">
-            {globalData.btcDominance.toFixed(2)}%
-          </p>
-          <span className="font-mono tabular-nums text-xs text-[#848E9C]">
-            ETH {globalData.ethDominance.toFixed(1)}%
-          </span>
+          {isLoading ? (
+            <div className="h-7 w-28 animate-pulse rounded bg-[#1E2329]" />
+          ) : (
+            <>
+              <p className="font-mono tabular-nums text-2xl font-bold tracking-tight text-[#EAECEF]">
+                {globalData.btcDominance.toFixed(2)}%
+              </p>
+              <span className="font-mono tabular-nums text-xs text-[#848E9C]">
+                ETH {globalData.ethDominance.toFixed(1)}%
+              </span>
+            </>
+          )}
         </div>
 
         <div className="mt-3">
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-[#0B0E11]">
             <div
               className="h-full rounded-full bg-[#F0B90B]"
-              style={{ width: `${Math.min(100, globalData.btcDominance)}%` }}
+              style={{ width: `${isLoading ? 0 : Math.min(100, globalData.btcDominance)}%` }}
             />
           </div>
           <p className="mt-1.5 text-[11px] text-[#848E9C]">
@@ -175,10 +181,16 @@ export function GlobalKpiCards({ globalData, fearGreed, isLoading }: GlobalKpiCa
         </div>
 
         <div className="mt-2.5 flex items-baseline gap-2">
-          <p className="font-mono tabular-nums text-2xl font-bold tracking-tight text-[#EAECEF]">
-            {globalData.usdtDominance.toFixed(2)}%
-          </p>
-          <span className="text-xs text-[#848E9C]">Dry Powder</span>
+          {isLoading ? (
+            <div className="h-7 w-24 animate-pulse rounded bg-[#1E2329]" />
+          ) : (
+            <>
+              <p className="font-mono tabular-nums text-2xl font-bold tracking-tight text-[#EAECEF]">
+                {globalData.usdtDominance.toFixed(2)}%
+              </p>
+              <span className="text-xs text-[#848E9C]">Dry Powder</span>
+            </>
+          )}
         </div>
 
         <div className="mt-3 border-t border-[#2B3139] pt-2.5 text-[11px] text-[#848E9C]">
@@ -198,28 +210,35 @@ export function GlobalKpiCards({ globalData, fearGreed, isLoading }: GlobalKpiCa
           </span>
         </div>
 
-        <div className="mt-1.5 flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-1.5">
-              <span
-                className="font-mono tabular-nums text-2xl font-bold"
-                style={{ color: fgColor }}
-              >
-                {fearGreed.value}
-              </span>
-              <span className="font-mono tabular-nums text-xs text-[#848E9C]">/100</span>
-            </div>
-            <p className="truncate text-xs font-semibold" style={{ color: fgColor }}>
-              {fearGreed.classification}
-            </p>
-            {fgDelta !== null && (
-              <p className="font-mono tabular-nums mt-0.5 text-[11px] text-[#848E9C]">
-                vs kemarin: {fgDelta >= 0 ? `+${fgDelta}` : fgDelta}
-              </p>
-            )}
+        {isLoading ? (
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <div className="h-12 w-24 animate-pulse rounded bg-[#1E2329]" />
+            <div className="h-12 w-24 animate-pulse rounded bg-[#1E2329]" />
           </div>
-          <FearGreedGauge value={fearGreed.value} />
-        </div>
+        ) : (
+          <div className="mt-1.5 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-1.5">
+                <span
+                  className="font-mono tabular-nums text-2xl font-bold"
+                  style={{ color: fgColor }}
+                >
+                  {fearGreed.value}
+                </span>
+                <span className="font-mono tabular-nums text-xs text-[#848E9C]">/100</span>
+              </div>
+              <p className="truncate text-xs font-semibold" style={{ color: fgColor }}>
+                {fearGreed.classification}
+              </p>
+              {fgDelta !== null && (
+                <p className="font-mono tabular-nums mt-0.5 text-[11px] text-[#848E9C]">
+                  vs kemarin: {fgDelta >= 0 ? `+${fgDelta}` : fgDelta}
+                </p>
+              )}
+            </div>
+            <FearGreedGauge value={fearGreed.value} />
+          </div>
+        )}
       </div>
     </section>
   );

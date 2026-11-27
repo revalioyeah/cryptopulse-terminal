@@ -1,14 +1,17 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { AlertCondition, PriceAlert, TelegramConfig } from '../types';
+import type { AlertCondition, CloudSyncConfig, PriceAlert, TelegramConfig } from '../types';
 import { generateId } from '../utils/format';
 
 export interface SettingsPersistedData {
   priceAlerts: PriceAlert[];
   telegramConfig: TelegramConfig;
+  cloudSyncConfig?: CloudSyncConfig;
 }
 
 interface SettingsState extends SettingsPersistedData {
+  cloudSyncConfig: CloudSyncConfig;
+  demoCleanedV2?: boolean;
   addPriceAlert: (input: {
     symbol: string;
     baseAsset: string;
@@ -21,6 +24,7 @@ interface SettingsState extends SettingsPersistedData {
   markAlertTriggered: (id: string, triggeredPrice: number) => void;
   deletePriceAlert: (id: string) => void;
   updateTelegramConfig: (partial: Partial<TelegramConfig>) => void;
+  updateCloudSyncConfig: (partial: Partial<CloudSyncConfig>) => void;
   hydrateSettings: (data: Partial<SettingsPersistedData>) => void;
 }
 
@@ -34,36 +38,23 @@ const DEFAULT_TELEGRAM: TelegramConfig = {
   autoSendAlerts: true,
 };
 
-const SEEDED_ALERTS: PriceAlert[] = [
-  {
-    id: 'alert_seed_btc',
-    symbol: 'BTCUSDT',
-    baseAsset: 'BTC',
-    condition: 'ABOVE',
-    targetPrice: 100000,
-    note: 'Breakout psikologis $100K — pantau volume konfirmasi',
-    active: true,
-    triggered: false,
-    createdAt: Date.now() - 3_600_000,
-  },
-  {
-    id: 'alert_seed_sol',
-    symbol: 'SOLUSDT',
-    baseAsset: 'SOL',
-    condition: 'BELOW',
-    targetPrice: 195,
-    note: 'Zona DCA Layer 1 SOL',
-    active: true,
-    triggered: false,
-    createdAt: Date.now() - 7_200_000,
-  },
-];
+const DEFAULT_CLOUD_SYNC: CloudSyncConfig = {
+  enabled: false,
+  githubToken: '',
+  gistId: '',
+  autoSync: true,
+  includeSecrets: true,
+};
+
+const LEGACY_DEMO_ALERT_IDS = new Set(['alert_seed_btc', 'alert_seed_sol']);
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
-      priceAlerts: SEEDED_ALERTS,
+      priceAlerts: [],
       telegramConfig: DEFAULT_TELEGRAM,
+      cloudSyncConfig: DEFAULT_CLOUD_SYNC,
+      demoCleanedV2: true,
 
       addPriceAlert: (input) => {
         const alert: PriceAlert = {
@@ -124,16 +115,66 @@ export const useSettingsStore = create<SettingsState>()(
           telegramConfig: { ...state.telegramConfig, ...partial },
         })),
 
+      updateCloudSyncConfig: (partial) =>
+        set((state) => ({
+          cloudSyncConfig: { ...state.cloudSyncConfig, ...partial },
+        })),
+
       hydrateSettings: (data) =>
         set((state) => ({
-          priceAlerts: Array.isArray(data.priceAlerts) ? data.priceAlerts : state.priceAlerts,
+          priceAlerts: Array.isArray(data.priceAlerts)
+            ? data.priceAlerts.filter((a) => !LEGACY_DEMO_ALERT_IDS.has(a.id))
+            : state.priceAlerts,
           telegramConfig: data.telegramConfig
             ? { ...DEFAULT_TELEGRAM, ...data.telegramConfig }
             : state.telegramConfig,
+          cloudSyncConfig: data.cloudSyncConfig
+            ? { ...state.cloudSyncConfig, ...data.cloudSyncConfig }
+            : state.cloudSyncConfig,
         })),
     }),
     {
       name: 'cryptopulse-settings-v1',
+      version: 2,
+      migrate: (persistedState) => {
+        const persisted = (persistedState ?? {}) as Partial<SettingsState>;
+        const rawAlerts = Array.isArray(persisted.priceAlerts) ? persisted.priceAlerts : [];
+        return {
+          ...persisted,
+          priceAlerts: rawAlerts.filter((a) => !LEGACY_DEMO_ALERT_IDS.has(a.id)),
+          telegramConfig: {
+            ...DEFAULT_TELEGRAM,
+            ...(persisted.telegramConfig ?? {}),
+          },
+          cloudSyncConfig: {
+            ...DEFAULT_CLOUD_SYNC,
+            ...(persisted.cloudSyncConfig ?? {}),
+          },
+          demoCleanedV2: true,
+        };
+      },
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<SettingsState>;
+        const rawAlerts = Array.isArray(persisted.priceAlerts) ? persisted.priceAlerts : [];
+        const cleanedAlerts = persisted.demoCleanedV2
+          ? rawAlerts
+          : rawAlerts.filter((a) => !LEGACY_DEMO_ALERT_IDS.has(a.id));
+
+        return {
+          ...currentState,
+          ...persisted,
+          priceAlerts: cleanedAlerts,
+          telegramConfig: {
+            ...DEFAULT_TELEGRAM,
+            ...(persisted.telegramConfig ?? {}),
+          },
+          cloudSyncConfig: {
+            ...DEFAULT_CLOUD_SYNC,
+            ...(persisted.cloudSyncConfig ?? {}),
+          },
+          demoCleanedV2: true,
+        };
+      },
     },
   ),
 );

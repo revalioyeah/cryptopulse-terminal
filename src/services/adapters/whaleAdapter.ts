@@ -1,118 +1,248 @@
-import type { Coin, WhaleTx, WhaleTxType } from '../../types';
-import { generateId } from '../../utils/format';
+import type { WhaleTx, WhaleTxType } from '../../types';
 
-const WHALE_API_KEY = (import.meta.env.VITE_WHALE_ALERT_API_KEY as string | undefined)?.trim();
+const BINANCE_REST_BASE =
+  (import.meta.env.VITE_BINANCE_REST_URL as string | undefined)?.trim() ||
+  'https://data-api.binance.vision';
 
-const EXCHANGES = ['Binance Hot', 'Binance Cold', 'Coinbase Institutional', 'OKX Treasury', 'Bybit Cold', 'Kraken Vault'];
-const WALLETS = ['Unknown Whale #A4F', 'Smart Money Vault #09', 'Wintermute OTC', 'Abraxas Capital Desk', 'Institutional Custody', 'Whale Accumulator #77'];
+const BINANCE_STREAM_BASE =
+  (import.meta.env.VITE_BINANCE_STREAM_URL as string | undefined)?.trim() ||
+  'wss://data-stream.binance.vision/stream';
 
-const WHALE_ASSETS: Array<{ symbol: string; baseAsset: string; chain: string }> = [
-  { symbol: 'BTCUSDT', baseAsset: 'BTC', chain: 'Bitcoin' },
-  { symbol: 'ETHUSDT', baseAsset: 'ETH', chain: 'Ethereum' },
-  { symbol: 'SOLUSDT', baseAsset: 'SOL', chain: 'Solana' },
-  { symbol: 'LINKUSDT', baseAsset: 'LINK', chain: 'Ethereum' },
-  { symbol: 'TAOUSDT', baseAsset: 'TAO', chain: 'Bittensor' },
-  { symbol: 'SUIUSDT', baseAsset: 'SUI', chain: 'Sui' },
-  { symbol: 'AAVEUSDT', baseAsset: 'AAVE', chain: 'Ethereum' },
-  { symbol: 'PEPEUSDT', baseAsset: 'PEPE', chain: 'Ethereum' },
-  { symbol: 'ONDOUSDT', baseAsset: 'ONDO', chain: 'Ethereum' },
-  { symbol: 'XRPUSDT', baseAsset: 'XRP', chain: 'Ripple' },
-  { symbol: 'DOGEUSDT', baseAsset: 'DOGE', chain: 'Dogecoin' },
-  { symbol: 'ENAUSDT', baseAsset: 'ENA', chain: 'Ethereum' },
+export const WHALE_MIN_NOTIONAL_USD = 25_000;
+export const WHALE_MEGA_BLOCK_USD = 250_000;
+
+export const MONITORED_WHALE_PAIRS: Array<{ symbol: string; baseAsset: string }> = [
+  { symbol: 'BTCUSDT', baseAsset: 'BTC' },
+  { symbol: 'ETHUSDT', baseAsset: 'ETH' },
+  { symbol: 'SOLUSDT', baseAsset: 'SOL' },
+  { symbol: 'BNBUSDT', baseAsset: 'BNB' },
+  { symbol: 'XRPUSDT', baseAsset: 'XRP' },
+  { symbol: 'DOGEUSDT', baseAsset: 'DOGE' },
+  { symbol: 'SUIUSDT', baseAsset: 'SUI' },
+  { symbol: 'LINKUSDT', baseAsset: 'LINK' },
+  { symbol: 'AVAXUSDT', baseAsset: 'AVAX' },
+  { symbol: 'ADAUSDT', baseAsset: 'ADA' },
+  { symbol: 'PEPEUSDT', baseAsset: 'PEPE' },
+  { symbol: 'TAOUSDT', baseAsset: 'TAO' },
 ];
 
-function randomItem<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
+interface BinanceAggTradeRestRow {
+  a: number; // Aggregate tradeId
+  p: string; // Price
+  q: string; // Quantity
+  T: number; // Timestamp (ms)
+  m: boolean; // Was the buyer the maker? (true => Taker Sell, false => Taker Buy)
 }
 
-function randomHex(len: number): string {
-  const chars = '0123456789abcdef';
-  let out = '0x';
-  for (let i = 0; i < len; i++) {
-    out += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return out;
-}
-
-export function createMockWhaleTx(coinsMap: Record<string, Coin>, timestampOffsetMs = 0): WhaleTx {
-  const asset = randomItem(WHALE_ASSETS);
-  const coin = coinsMap[asset.symbol];
-  const price = coin?.price ?? 100;
-
-  const roll = Math.random();
-  const type: WhaleTxType =
-    roll < 0.44
-      ? 'EXCHANGE_OUTFLOW'
-      : roll < 0.82
-        ? 'EXCHANGE_INFLOW'
-        : 'WALLET_TRANSFER';
-
-  // Weighted USD size between $520K and $26M
-  const sizeRoll = Math.random();
-  const amountUsd =
-    sizeRoll < 0.48
-      ? 520_000 + Math.random() * 980_000
-      : sizeRoll < 0.82
-        ? 1_500_000 + Math.random() * 4_200_000
-        : 5_800_000 + Math.random() * 18_500_000;
-
-  const amount = amountUsd / Math.max(price, 1e-8);
-
-  let fromLabel: string;
-  let toLabel: string;
-  if (type === 'EXCHANGE_OUTFLOW') {
-    fromLabel = randomItem(EXCHANGES);
-    toLabel = randomItem(WALLETS);
-  } else if (type === 'EXCHANGE_INFLOW') {
-    fromLabel = randomItem(WALLETS);
-    toLabel = randomItem(EXCHANGES);
-  } else {
-    fromLabel = randomItem(WALLETS);
-    toLabel = randomItem(WALLETS.filter((w) => w !== fromLabel));
-  }
-
-  return {
-    id: generateId('whale'),
-    symbol: asset.symbol,
-    baseAsset: asset.baseAsset,
-    amount,
-    amountUsd: Math.round(amountUsd),
-    type,
-    fromLabel,
-    toLabel,
-    txHash: `${randomHex(8)}...${randomHex(6).slice(2)}`,
-    blockchain: asset.chain,
-    timestamp: Date.now() - timestampOffsetMs,
+interface BinanceAggTradeWsEnvelope {
+  stream?: string;
+  data?: {
+    e: string;
+    s: string; // Symbol
+    a: number; // Aggregate trade ID
+    p: string; // Price
+    q: string; // Quantity
+    T: number; // Trade time
+    m: boolean; // Is the buyer the market maker?
   };
 }
 
-export function buildInitialWhaleFeed(coinsMap: Record<string, Coin>): WhaleTx[] {
-  const list: WhaleTx[] = [];
-  for (let i = 0; i < 24; i++) {
-    list.push(createMockWhaleTx(coinsMap, i * 185_000 + Math.floor(Math.random() * 60_000)));
+function mapAggTradeToWhaleTx(params: {
+  symbol: string;
+  baseAsset: string;
+  aggId: number;
+  price: number;
+  qty: number;
+  timestamp: number;
+  isBuyerMaker: boolean;
+}): WhaleTx | null {
+  const amountUsd = params.price * params.qty;
+  if (!Number.isFinite(amountUsd) || amountUsd < WHALE_MIN_NOTIONAL_USD) {
+    return null;
   }
-  return list.sort((a, b) => b.timestamp - a.timestamp);
+
+  // m === false -> Buyer is taker (aggressive market buy sweeping asks)
+  // m === true  -> Seller is taker (aggressive market sell hitting bids)
+  const type: WhaleTxType = params.isBuyerMaker ? 'WHALE_SELL' : 'WHALE_BUY';
+  const isMegaBlock = amountUsd >= WHALE_MEGA_BLOCK_USD;
+
+  return {
+    id: `${params.symbol}-${params.aggId}`,
+    symbol: params.symbol,
+    baseAsset: params.baseAsset,
+    price: params.price,
+    amount: params.qty,
+    amountUsd: Math.round(amountUsd),
+    type,
+    fromLabel: type === 'WHALE_BUY' ? 'Orderbook Ask' : 'Market Seller (Taker)',
+    toLabel: type === 'WHALE_BUY' ? 'Institutional Buyer (Taker)' : 'Orderbook Bid',
+    txHash: `Trade #${params.aggId}`,
+    blockchain: 'Binance Spot',
+    timestamp: params.timestamp || Date.now(),
+    isMegaBlock,
+    source: 'Binance Live',
+  };
+}
+
+async function fetchSymbolAggTrades(
+  symbol: string,
+  baseAsset: string,
+): Promise<WhaleTx[]> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 6500);
+  try {
+    const res = await fetch(
+      `${BINANCE_REST_BASE}/api/v3/aggTrades?symbol=${encodeURIComponent(symbol)}&limit=500`,
+      { signal: controller.signal },
+    );
+    if (!res.ok) return [];
+    const rows = (await res.json()) as BinanceAggTradeRestRow[];
+    if (!Array.isArray(rows)) return [];
+
+    const result: WhaleTx[] = [];
+    for (const r of rows) {
+      const price = Number.parseFloat(r.p);
+      const qty = Number.parseFloat(r.q);
+      const tx = mapAggTradeToWhaleTx({
+        symbol,
+        baseAsset,
+        aggId: r.a,
+        price,
+        qty,
+        timestamp: r.T,
+        isBuyerMaker: Boolean(r.m),
+      });
+      if (tx) result.push(tx);
+    }
+    return result;
+  } catch {
+    return [];
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 /**
- * Modular Whale Stream Adapter — siap dihubungkan ke Whale Alert / Coinglass / DeFiLlama API
- * menggunakan VITE_WHALE_ALERT_API_KEY, dengan fallback live stream realistis.
+ * Mengambil eksekusi block order besar (>= $25,000) REAL-TIME terbaru dari Binance Spot `aggTrades`
+ * pada 12 pair likuiditas utama tanpa data simulasi / acak.
+ */
+export async function fetchInitialWhaleFeed(): Promise<WhaleTx[]> {
+  const settled = await Promise.allSettled(
+    MONITORED_WHALE_PAIRS.map((p) => fetchSymbolAggTrades(p.symbol, p.baseAsset)),
+  );
+
+  const merged: WhaleTx[] = [];
+  const seen = new Set<string>();
+  for (const res of settled) {
+    if (res.status !== 'fulfilled') continue;
+    for (const tx of res.value) {
+      if (seen.has(tx.id)) continue;
+      seen.add(tx.id);
+      merged.push(tx);
+    }
+  }
+
+  return merged.sort((a, b) => b.timestamp - a.timestamp).slice(0, 120);
+}
+
+export type WhaleStreamStatus = 'connected' | 'connecting' | 'reconnecting';
+
+/**
+ * Live WebSocket Combined Stream Binance (`@aggTrade`) untuk memantau eksekusi block trade
+ * bernilai besar (>= $25K) secara real-time dengan cleanup & auto-reconnect aman.
  */
 export function subscribeWhaleStream(
-  getCoinsMap: () => Record<string, Coin>,
   onTx: (tx: WhaleTx) => void,
+  onStatus?: (status: WhaleStreamStatus) => void,
 ): () => void {
+  let ws: WebSocket | null = null;
+  let reconnectTimer: number | null = null;
   let disposed = false;
+  let retryCount = 0;
 
-  // Optional external polling hook if VITE_WHALE_ALERT_API_KEY is supplied
-  const intervalMs = WHALE_API_KEY ? 15_000 : 4800;
-  const timer = window.setInterval(() => {
+  const streams = MONITORED_WHALE_PAIRS.map((p) => `${p.symbol.toLowerCase()}@aggTrade`).join('/');
+  const baseBySymbol = new Map(MONITORED_WHALE_PAIRS.map((p) => [p.symbol, p.baseAsset]));
+
+  const connect = (): void => {
     if (disposed) return;
-    onTx(createMockWhaleTx(getCoinsMap(), 0));
-  }, intervalMs);
+    onStatus?.(retryCount === 0 ? 'connecting' : 'reconnecting');
+
+    try {
+      ws = new WebSocket(`${BINANCE_STREAM_BASE}?streams=${streams}`);
+    } catch {
+      scheduleReconnect();
+      return;
+    }
+
+    ws.onopen = () => {
+      if (disposed) return;
+      retryCount = 0;
+      onStatus?.('connected');
+    };
+
+    ws.onmessage = (event: MessageEvent<string>) => {
+      if (disposed) return;
+      try {
+        const env = JSON.parse(event.data) as BinanceAggTradeWsEnvelope;
+        const d = env.data;
+        if (!d || !d.s) return;
+        const price = Number.parseFloat(d.p);
+        const qty = Number.parseFloat(d.q);
+        const baseAsset = baseBySymbol.get(d.s) ?? d.s.replace(/USDT$/, '');
+        const tx = mapAggTradeToWhaleTx({
+          symbol: d.s,
+          baseAsset,
+          aggId: d.a,
+          price,
+          qty,
+          timestamp: d.T,
+          isBuyerMaker: Boolean(d.m),
+        });
+        if (tx) {
+          onTx(tx);
+        }
+      } catch {
+        // Ignore malformed frame
+      }
+    };
+
+    ws.onerror = () => {
+      // Handled by onclose reconnect
+    };
+
+    ws.onclose = () => {
+      if (disposed) return;
+      scheduleReconnect();
+    };
+  };
+
+  const scheduleReconnect = (): void => {
+    if (disposed) return;
+    retryCount += 1;
+    onStatus?.('reconnecting');
+    const delayMs = Math.min(20_000, 2500 * retryCount);
+    reconnectTimer = window.setTimeout(connect, delayMs);
+  };
+
+  connect();
 
   return () => {
     disposed = true;
-    window.clearInterval(timer);
+    if (reconnectTimer !== null) {
+      window.clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+      ws = null;
+    }
   };
 }

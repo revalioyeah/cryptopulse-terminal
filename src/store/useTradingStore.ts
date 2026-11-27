@@ -19,6 +19,7 @@ export interface TradingPersistedData {
 }
 
 interface TradingState extends TradingPersistedData {
+  demoCleanedV2?: boolean;
   toggleWatchlist: (symbol: string) => boolean;
   addToWatchlistBatch: (symbols: string[]) => number;
   addFuturesSetup: (setup: TradeSetup) => void;
@@ -64,125 +65,19 @@ const DEFAULT_SCANNER_CONFIG: AutoSignalConfig = {
   defaultSpotBudget: 1000,
 };
 
-const SEEDED_FUTURES_SETUPS: TradeSetup[] = [
-  {
-    id: 'seed_fut_1',
-    symbol: 'BTCUSDT',
-    baseAsset: 'BTC',
-    direction: 'LONG',
-    timeframe: '4h',
-    entryMode: 'SINGLE',
-    entries: [{ price: 92800, weightPercent: 100 }],
-    avgEntry: 92800,
-    stopLoss: 91200,
-    takeProfits: [
-      { label: 'TP1', price: 95200, allocationPercent: 40 },
-      { label: 'TP2', price: 97600, allocationPercent: 35 },
-      { label: 'TP3', price: 100400, allocationPercent: 25 },
-    ],
-    accountEquity: 10000,
-    riskPercent: 1.0,
-    leverage: 10,
-    riskAmountUsdt: 100,
-    positionSizeUsdt: 5800,
-    positionQty: 0.0625,
-    marginRequiredUsdt: 580,
-    estimatedLiquidation: 83984,
-    rrTp1: 1.5,
-    rrTp2: 3.0,
-    rrTp3: 4.75,
-    btcBetaAligned: true,
-    confluenceChecks: ['Trend 4H Bullish', 'EMA 20/50 Support', 'Volume Confirmation'],
-    notes: 'Reclaim area demand 4H dengan funding netral.',
-    status: 'Running',
-    source: 'Backtest',
-    createdAt: Date.now() - 8 * 3_600_000,
-    updatedAt: Date.now() - 4 * 3_600_000,
-  },
-  {
-    id: 'seed_fut_2',
-    symbol: 'SOLUSDT',
-    baseAsset: 'SOL',
-    direction: 'LONG',
-    timeframe: '1h',
-    entryMode: 'SINGLE',
-    entries: [{ price: 204.5, weightPercent: 100 }],
-    avgEntry: 204.5,
-    stopLoss: 198.2,
-    takeProfits: [
-      { label: 'TP1', price: 214.0, allocationPercent: 50 },
-      { label: 'TP2', price: 221.5, allocationPercent: 30 },
-      { label: 'TP3', price: 230.0, allocationPercent: 20 },
-    ],
-    accountEquity: 10000,
-    riskPercent: 1.0,
-    leverage: 8,
-    riskAmountUsdt: 100,
-    positionSizeUsdt: 3246,
-    positionQty: 15.873,
-    marginRequiredUsdt: 405.75,
-    estimatedLiquidation: 180.1,
-    rrTp1: 1.51,
-    rrTp2: 2.7,
-    rrTp3: 4.05,
-    btcBetaAligned: true,
-    confluenceChecks: ['Breakout Volume >200%', 'MTF Bullish', 'BTC Beta Searah'],
-    notes: 'Breakout struktur 1H + lonjakan OI sehat.',
-    status: 'Hit TP',
-    realizedPnlUsdt: 218.4,
-    source: 'Manual',
-    createdAt: Date.now() - 30 * 3_600_000,
-    updatedAt: Date.now() - 18 * 3_600_000,
-    closedAt: Date.now() - 18 * 3_600_000,
-  },
-  {
-    id: 'seed_fut_3',
-    symbol: 'WIFUSDT',
-    baseAsset: 'WIF',
-    direction: 'SHORT',
-    timeframe: '15m',
-    entryMode: 'SINGLE',
-    entries: [{ price: 2.94, weightPercent: 100 }],
-    avgEntry: 2.94,
-    stopLoss: 3.06,
-    takeProfits: [
-      { label: 'TP1', price: 2.76, allocationPercent: 50 },
-      { label: 'TP2', price: 2.64, allocationPercent: 30 },
-      { label: 'TP3', price: 2.52, allocationPercent: 20 },
-    ],
-    accountEquity: 10000,
-    riskPercent: 0.75,
-    leverage: 5,
-    riskAmountUsdt: 75,
-    positionSizeUsdt: 1837.5,
-    positionQty: 625,
-    marginRequiredUsdt: 367.5,
-    estimatedLiquidation: 3.49,
-    rrTp1: 1.5,
-    rrTp2: 2.5,
-    rrTp3: 3.5,
-    btcBetaAligned: false,
-    confluenceChecks: ['RSI Overbought Divergence'],
-    notes: 'Counter-trend scalp di resistance lokal.',
-    status: 'Hit SL',
-    realizedPnlUsdt: -75,
-    source: 'Manual',
-    createdAt: Date.now() - 26 * 3_600_000,
-    updatedAt: Date.now() - 22 * 3_600_000,
-    closedAt: Date.now() - 22 * 3_600_000,
-  },
-];
+const LEGACY_DEMO_SETUP_IDS = new Set(['seed_fut_1', 'seed_fut_2', 'seed_fut_3']);
 
 export const useTradingStore = create<TradingState>()(
   persist(
     (set, get) => ({
-      watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'TAOUSDT', 'LINKUSDT', 'PEPEUSDT'],
-      futuresSetups: SEEDED_FUTURES_SETUPS,
+      watchlist: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'SUIUSDT'],
+      futuresSetups: [],
       spotSetups: [],
       maxDailySlHits: 2,
       scannerConfig: DEFAULT_SCANNER_CONFIG,
       scannerLogs: [],
       scannerCooldowns: {},
+      demoCleanedV2: true,
 
       toggleWatchlist: (symbol) => {
         const exists = get().watchlist.includes(symbol);
@@ -284,7 +179,9 @@ export const useTradingStore = create<TradingState>()(
       hydrateTrading: (data) =>
         set((state) => ({
           watchlist: Array.isArray(data.watchlist) ? data.watchlist : state.watchlist,
-          futuresSetups: Array.isArray(data.futuresSetups) ? data.futuresSetups : state.futuresSetups,
+          futuresSetups: Array.isArray(data.futuresSetups)
+            ? data.futuresSetups.filter((s) => !LEGACY_DEMO_SETUP_IDS.has(s.id))
+            : state.futuresSetups,
           spotSetups: Array.isArray(data.spotSetups) ? data.spotSetups : state.spotSetups,
           maxDailySlHits: typeof data.maxDailySlHits === 'number' ? data.maxDailySlHits : state.maxDailySlHits,
           scannerConfig: data.scannerConfig
@@ -296,15 +193,36 @@ export const useTradingStore = create<TradingState>()(
     }),
     {
       name: 'cryptopulse-trading-v1',
-      merge: (persistedState, currentState) => {
+      version: 2,
+      migrate: (persistedState) => {
         const persisted = (persistedState ?? {}) as Partial<TradingState>;
+        const rawSetups = Array.isArray(persisted.futuresSetups) ? persisted.futuresSetups : [];
         return {
-          ...currentState,
           ...persisted,
+          futuresSetups: rawSetups.filter((s) => !LEGACY_DEMO_SETUP_IDS.has(s.id)),
           scannerConfig: {
             ...DEFAULT_SCANNER_CONFIG,
             ...(persisted.scannerConfig ?? {}),
           },
+          demoCleanedV2: true,
+        };
+      },
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<TradingState>;
+        const rawSetups = Array.isArray(persisted.futuresSetups) ? persisted.futuresSetups : [];
+        const cleanedSetups = persisted.demoCleanedV2
+          ? rawSetups
+          : rawSetups.filter((s) => !LEGACY_DEMO_SETUP_IDS.has(s.id));
+
+        return {
+          ...currentState,
+          ...persisted,
+          futuresSetups: cleanedSetups,
+          scannerConfig: {
+            ...DEFAULT_SCANNER_CONFIG,
+            ...(persisted.scannerConfig ?? {}),
+          },
+          demoCleanedV2: true,
         };
       },
     },

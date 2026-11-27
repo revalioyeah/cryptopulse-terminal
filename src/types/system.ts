@@ -1,17 +1,20 @@
-export type WhaleTxType = 'EXCHANGE_INFLOW' | 'EXCHANGE_OUTFLOW' | 'WALLET_TRANSFER';
+export type WhaleTxType = 'WHALE_BUY' | 'WHALE_SELL';
 
 export interface WhaleTx {
   id: string;
   symbol: string; // e.g., 'BTCUSDT'
   baseAsset: string; // e.g., 'BTC'
+  price: number;
   amount: number;
   amountUsd: number;
   type: WhaleTxType;
   fromLabel: string;
   toLabel: string;
-  txHash: string;
-  blockchain: string;
+  txHash: string; // Real Binance AggTrade ID e.g. #3849102941
+  blockchain: string; // Exchange / Market venue e.g. 'Binance Spot'
   timestamp: number;
+  isMegaBlock?: boolean;
+  source: 'Binance Live' | 'Fallback';
 }
 
 export type AlertCondition = 'ABOVE' | 'BELOW';
@@ -41,6 +44,19 @@ export interface TelegramConfig {
   lastTestedAt?: number;
   lastTestSuccess?: boolean;
 }
+
+export interface CloudSyncConfig {
+  enabled: boolean;
+  githubToken: string;
+  gistId: string;
+  autoSync: boolean;
+  includeSecrets: boolean;
+  lastSyncedAt?: number;
+  lastSyncDirection?: 'PUSH' | 'PULL';
+  lastSyncError?: string;
+}
+
+export type MarketDataSource = 'loading' | 'live' | 'fallback';
 
 export type NavTabId =
   | 'dashboard'

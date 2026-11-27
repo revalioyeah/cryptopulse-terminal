@@ -46,9 +46,10 @@ export function AnalysisPage() {
   const summary = useMemo(() => buildTechnicalSummary(candles), [candles]);
 
   const derivativesQuery = useQuery({
-    queryKey: ['derivatives', coin.symbol, Math.round(coin.price * 100)],
+    queryKey: ['derivatives', coin.symbol],
     queryFn: () => fetchDerivativesSnapshot(coin),
     staleTime: 30_000,
+    refetchInterval: 45_000,
   });
 
   const mtfQueries = useQueries({
@@ -67,7 +68,10 @@ export function AnalysisPage() {
     });
   }, [mtfQueries]);
 
-  const liqClusters = useMemo(() => computeLiquidationClusters(coin), [coin]);
+  const liqClusters = useMemo(
+    () => computeLiquidationClusters(coin, derivativesQuery.data?.openInterestUsd),
+    [coin, derivativesQuery.data?.openInterestUsd],
+  );
   const pos = coin.priceChangePercent24h >= 0;
 
   return (

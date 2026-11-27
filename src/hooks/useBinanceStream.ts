@@ -18,7 +18,7 @@ export function useBinanceStream(): void {
 
   useEffect(() => {
     if (tickerResult?.coins && tickerResult.coins.length > 0) {
-      seedCoins(tickerResult.coins);
+      seedCoins(tickerResult.coins, tickerResult.isFallback);
     }
   }, [tickerResult, seedCoins]);
 

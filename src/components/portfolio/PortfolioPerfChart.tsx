@@ -64,6 +64,18 @@ export function PortfolioPerfChart({ snapshots }: { snapshots: PortfolioSnapshot
     };
   }, [snapshots]);
 
+  if (snapshots.length === 0) {
+    return (
+      <div className="flex h-[210px] items-center justify-center rounded-xl border border-dashed border-[#2B3139] bg-[#0B0E11] px-4 text-center">
+        <p className="max-w-xs text-xs leading-relaxed text-[#848E9C]">
+          Grafik kinerja historis otomatis mulai terekam setelah Anda mengisi saldo{' '}
+          <span className="font-semibold text-[#F0B90B]">Kas USDT</span> atau mencatat transaksi{' '}
+          <span className="font-semibold text-[#EAECEF]">Beli / DCA Spot</span> pertama.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-hidden rounded-xl border border-[#2B3139] bg-[#0B0E11]">
       <div ref={ref} className="w-full" />

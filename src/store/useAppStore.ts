@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   Coin,
   FuturesScanReport,
+  MarketDataSource,
   MiniTickerPayload,
   NavTabId,
   ScreenerPreset,
@@ -15,6 +16,8 @@ import type {
 import { buildFallbackCoins, deriveTechnicalHints } from '../services/adapters/mockData';
 import { generateId } from '../utils/format';
 
+export type SettingsModalTab = 'TELEGRAM' | 'SYNC' | 'BACKUP';
+
 interface AppState {
   activeTab: NavTabId;
   selectedSymbol: string;
@@ -23,11 +26,13 @@ interface AppState {
   screenerSectorFilter: SectorName | 'ALL';
   screenerPreset: ScreenerPreset;
   wsStatus: WsConnectionStatus;
+  marketSource: MarketDataSource;
   coinsMap: Record<string, Coin>;
   coins: Coin[];
   priceAlertsModalOpen: boolean;
   priceAlertDraftSymbol: string | null;
   settingsModalOpen: boolean;
+  settingsModalTab: SettingsModalTab;
   toasts: ToastItem[];
 
   // Shared global scanner runtime state (survives tab switches)
@@ -45,7 +50,7 @@ interface AppState {
   setScreenerSectorFilter: (sector: SectorName | 'ALL') => void;
   setScreenerPreset: (preset: ScreenerPreset) => void;
   setWsStatus: (status: WsConnectionStatus) => void;
-  seedCoins: (coins: Coin[]) => void;
+  seedCoins: (coins: Coin[], isFallback?: boolean) => void;
   applyMiniTicks: (ticks: MiniTickerPayload[]) => void;
 
   setScannerRuntime: (partial: {
@@ -66,7 +71,7 @@ interface AppState {
   ) => void;
   openPriceAlertsModal: (symbol?: string) => void;
   closePriceAlertsModal: () => void;
-  openSettingsModal: () => void;
+  openSettingsModal: (tab?: SettingsModalTab) => void;
   closeSettingsModal: () => void;
 
   pushToast: (title: string, description?: string, variant?: ToastVariant) => void;
@@ -84,11 +89,13 @@ export const useAppStore = create<AppState>((set) => ({
   screenerSectorFilter: 'ALL',
   screenerPreset: 'ALL',
   wsStatus: 'connecting',
+  marketSource: 'loading',
   coinsMap: initialMap,
   coins: initialCoins,
   priceAlertsModalOpen: false,
   priceAlertDraftSymbol: null,
   settingsModalOpen: false,
+  settingsModalTab: 'TELEGRAM',
   toasts: [],
 
   scannerRunning: false,
@@ -107,12 +114,16 @@ export const useAppStore = create<AppState>((set) => ({
   setWsStatus: (status) => set({ wsStatus: status }),
   setScannerRuntime: (partial) => set(partial),
 
-  seedCoins: (coins) => {
+  seedCoins: (coins, isFallback = false) => {
     const coinsMap: Record<string, Coin> = {};
     for (const c of coins) {
       coinsMap[c.symbol] = c;
     }
-    set({ coinsMap, coins });
+    set({
+      coinsMap,
+      coins,
+      marketSource: isFallback ? 'fallback' : 'live',
+    });
   },
 
   applyMiniTicks: (ticks) =>
@@ -153,7 +164,11 @@ export const useAppStore = create<AppState>((set) => ({
 
       if (!changed) return state;
       const nextCoins = state.coins.map((c) => nextMap[c.symbol] ?? c);
-      return { coinsMap: nextMap, coins: nextCoins };
+      return {
+        coinsMap: nextMap,
+        coins: nextCoins,
+        marketSource: 'live',
+      };
     }),
 
   openAnalysis: (symbol) =>
@@ -192,7 +207,11 @@ export const useAppStore = create<AppState>((set) => ({
       priceAlertDraftSymbol: null,
     }),
 
-  openSettingsModal: () => set({ settingsModalOpen: true }),
+  openSettingsModal: (tab) =>
+    set((state) => ({
+      settingsModalOpen: true,
+      settingsModalTab: tab ?? state.settingsModalTab,
+    })),
   closeSettingsModal: () => set({ settingsModalOpen: false }),
 
   pushToast: (title, description, variant = 'info') =>

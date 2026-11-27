@@ -121,64 +121,92 @@ export function DerivativesSnapshotCard({ data }: { data: DerivativesSnapshot })
           <Zap className="h-4 w-4 text-[#F0B90B]" />
           <h2 className="text-sm font-semibold text-[#EAECEF]">Derivatives Snapshot</h2>
         </div>
-        <span className="rounded bg-[#1E2329] px-1.5 py-0.5 text-[10px] text-[#848E9C]">
-          {data.isMock ? 'Adapter Est.' : 'Coinglass'}
+        <span
+          className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold ${
+            data.isMock
+              ? 'bg-[#1E2329] text-[#848E9C]'
+              : 'bg-[#00C087]/15 text-[#00C087]'
+          }`}
+        >
+          {!data.isMock && <span className="h-1.5 w-1.5 rounded-full bg-[#00C087]" />}
+          {data.isMock ? data.source : `LIVE · ${data.source}`}
         </span>
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-2.5">
-        <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
-          <span className="text-[11px] text-[#848E9C]">Funding Rate (8h)</span>
-          <p
-            className={`font-mono tabular-nums mt-1 text-lg font-bold ${
-              fundingPos ? 'text-[#00C087]' : 'text-[#F6465D]'
-            }`}
-          >
-            {fundingPos ? '+' : ''}
-            {data.fundingRate8h.toFixed(4)}%
-          </p>
-          <p className="font-mono tabular-nums mt-0.5 text-[10px] text-[#5E6673]">
-            Next: {formatCountdown(data.nextFundingTime, nowMs)}
-          </p>
+      {data.isMock ? (
+        <div className="mt-3 rounded-xl border border-dashed border-[#2B3139] bg-[#0B0E11] p-4 text-center text-xs text-[#848E9C]">
+          Kontrak perpetual USDT untuk aset ini tidak tersedia di Gate.io / Bitget / Hyperliquid.
+          Data derivatif tidak disimulasikan.
         </div>
+      ) : (
+        <>
+          <div className="mt-3 grid grid-cols-2 gap-2.5">
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
+              <span className="text-[11px] text-[#848E9C]">Funding Rate (8h)</span>
+              <p
+                className={`font-mono tabular-nums mt-1 text-lg font-bold ${
+                  fundingPos ? 'text-[#00C087]' : 'text-[#F6465D]'
+                }`}
+              >
+                {fundingPos ? '+' : ''}
+                {data.fundingRate8h.toFixed(4)}%
+              </p>
+              <p className="font-mono tabular-nums mt-0.5 text-[10px] text-[#5E6673]">
+                Next: {formatCountdown(data.nextFundingTime, nowMs)}
+              </p>
+            </div>
 
-        <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
-          <span className="text-[11px] text-[#848E9C]">Open Interest</span>
-          <p className="font-mono tabular-nums mt-1 text-lg font-bold text-[#EAECEF]">
-            {formatCompactUsd(data.openInterestUsd)}
-          </p>
-          <p
-            className={`font-mono tabular-nums mt-0.5 text-[11px] font-semibold ${
-              oiPos ? 'text-[#00C087]' : 'text-[#F6465D]'
-            }`}
-          >
-            {formatPercent(data.openInterestChange24h)} (24h)
-          </p>
-        </div>
-      </div>
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
+              <span className="text-[11px] text-[#848E9C]">Open Interest</span>
+              <p className="font-mono tabular-nums mt-1 text-lg font-bold text-[#EAECEF]">
+                {formatCompactUsd(data.openInterestUsd)}
+              </p>
+              {data.oiChangeAvailable ? (
+                <p
+                  className={`font-mono tabular-nums mt-0.5 text-[11px] font-semibold ${
+                    oiPos ? 'text-[#00C087]' : 'text-[#F6465D]'
+                  }`}
+                >
+                  {formatPercent(data.openInterestChange24h)} (24h)
+                </p>
+              ) : (
+                <p className="mt-0.5 text-[10px] text-[#5E6673]">OI Live Aktif</p>
+              )}
+            </div>
+          </div>
 
-      {/* Long / Short Ratio Bar */}
-      <div className="mt-3.5 rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
-        <div className="mb-1.5 flex items-center justify-between text-xs">
-          <span className="font-mono tabular-nums font-semibold text-[#00C087]">
-            Long {data.longRatioPercent.toFixed(1)}%
-          </span>
-          <span className="text-[11px] text-[#848E9C]">Long / Short Ratio</span>
-          <span className="font-mono tabular-nums font-semibold text-[#F6465D]">
-            Short {data.shortRatioPercent.toFixed(1)}%
-          </span>
-        </div>
-        <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-[#1E2329]">
-          <div
-            className="h-full bg-[#00C087]"
-            style={{ width: `${data.longRatioPercent}%` }}
-          />
-          <div
-            className="h-full bg-[#F6465D]"
-            style={{ width: `${data.shortRatioPercent}%` }}
-          />
-        </div>
-      </div>
+          {/* Long / Short Ratio Bar */}
+          <div className="mt-3.5 rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
+            {data.longShortAvailable ? (
+              <>
+                <div className="mb-1.5 flex items-center justify-between text-xs">
+                  <span className="font-mono tabular-nums font-semibold text-[#00C087]">
+                    Long {data.longRatioPercent.toFixed(1)}%
+                  </span>
+                  <span className="text-[11px] text-[#848E9C]">Long / Short Account Ratio</span>
+                  <span className="font-mono tabular-nums font-semibold text-[#F6465D]">
+                    Short {data.shortRatioPercent.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-[#1E2329]">
+                  <div
+                    className="h-full bg-[#00C087]"
+                    style={{ width: `${data.longRatioPercent}%` }}
+                  />
+                  <div
+                    className="h-full bg-[#F6465D]"
+                    style={{ width: `${data.shortRatioPercent}%` }}
+                  />
+                </div>
+              </>
+            ) : (
+              <p className="text-center text-[11px] text-[#848E9C]">
+                Long/Short Account Ratio tidak dipublikasikan bursa ini untuk pair {data.symbol}.
+              </p>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }

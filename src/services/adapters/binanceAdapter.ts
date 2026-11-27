@@ -1,7 +1,6 @@
 import type { Candle, Coin, MiniTickerPayload, Timeframe } from '../../types';
 import {
   COIN_META_MAP,
-  CURATED_COINS,
   buildFallbackCoins,
   deriveTechnicalHints,
   generateFallbackCandles,
@@ -233,74 +232,71 @@ export interface MiniTickerStreamCallbacks {
 }
 
 /**
- * Adapter WebSocket Binance (`!miniTicker@arr`) dengan auto-reconnect dan fallback tick simulator
- * yang bersih dan selalu mengembalikan fungsi cleanup.
+ * Adapter WebSocket Binance (`!miniTicker@arr`) dengan auto-reconnect dan fallback polling
+ * REST Binance real-time (TIDAK pernah menyuntikkan harga simulasi palsu ke atas data live).
  */
 export function createBinanceMiniTickerStream(
   callbacks: MiniTickerStreamCallbacks,
 ): () => void {
   let ws: WebSocket | null = null;
   let reconnectTimer: number | null = null;
-  let fallbackInterval: number | null = null;
+  let restPollInterval: number | null = null;
   let connectTimeout: number | null = null;
   let disposed = false;
   let retryCount = 0;
 
-  const mockPrices = new Map<string, { price: number; open: number; high: number; low: number; vol: number }>();
-  for (const c of CURATED_COINS) {
-    const open = c.basePrice / (1 + c.baseChange24h / 100);
-    mockPrices.set(c.symbol, {
-      price: c.basePrice,
-      open,
-      high: Math.max(c.basePrice, open) * 1.02,
-      low: Math.min(c.basePrice, open) * 0.98,
-      vol: c.baseQuoteVol,
-    });
-  }
-
-  const stopFallback = (): void => {
-    if (fallbackInterval !== null) {
-      window.clearInterval(fallbackInterval);
-      fallbackInterval = null;
+  const stopRestPoll = (): void => {
+    if (restPollInterval !== null) {
+      window.clearInterval(restPollInterval);
+      restPollInterval = null;
     }
   };
 
-  const startFallbackSimulator = (): void => {
-    if (disposed || fallbackInterval !== null) return;
-    callbacks.onStatus('fallback');
-    fallbackInterval = window.setInterval(() => {
-      if (disposed) return;
+  const pollBinanceRestOnce = async (): Promise<void> => {
+    if (disposed) return;
+    try {
+      const res = await fetchWithTimeout(`${BINANCE_REST_BASE}/api/v3/ticker/24hr`, 7500);
+      if (!res.ok || disposed) return;
+      const rows = (await res.json()) as BinanceTicker24hRaw[];
+      if (!Array.isArray(rows) || disposed) return;
       const now = Date.now();
-      const batch: MiniTickerPayload[] = [];
-
-      // Update a random subset of coins each tick to feel organic like Binance miniTicker
-      for (const c of CURATED_COINS) {
-        if (Math.random() > 0.42 && c.symbol !== 'BTCUSDT' && c.symbol !== 'ETHUSDT') continue;
-        const state = mockPrices.get(c.symbol);
-        if (!state) continue;
-        const drift = (Math.random() - 0.496) * 0.0028;
-        const nextPrice = Math.max(state.open * 0.65, state.price * (1 + drift));
-        state.price = nextPrice;
-        state.high = Math.max(state.high, nextPrice);
-        state.low = Math.min(state.low, nextPrice);
-        state.vol += Math.random() * (c.baseQuoteVol * 0.00025);
-
-        batch.push({
-          symbol: c.symbol,
-          close: nextPrice,
-          open: state.open,
-          high: state.high,
-          low: state.low,
-          volume: state.vol / nextPrice,
-          quoteVolume: state.vol,
+      const updates: MiniTickerPayload[] = [];
+      for (const item of rows) {
+        if (!item.symbol.endsWith('USDT')) continue;
+        const close = Number.parseFloat(item.lastPrice);
+        const change = Number.parseFloat(item.priceChange);
+        const open = close - change;
+        const high = Number.parseFloat(item.highPrice);
+        const low = Number.parseFloat(item.lowPrice);
+        const volume = Number.parseFloat(item.volume);
+        const quoteVolume = Number.parseFloat(item.quoteVolume);
+        if (!Number.isFinite(close) || close <= 0) continue;
+        updates.push({
+          symbol: item.symbol,
+          close,
+          open: Number.isFinite(open) && open > 0 ? open : close,
+          high,
+          low,
+          volume,
+          quoteVolume,
           eventTime: now,
         });
       }
-
-      if (batch.length > 0) {
-        callbacks.onTick(batch);
+      if (updates.length > 0 && !disposed) {
+        callbacks.onTick(updates);
       }
-    }, 2200);
+    } catch {
+      // Tetap tunggu reconnect WS / interval berikutnya tanpa menulis data simulasi palsu
+    }
+  };
+
+  const startRestFallbackPolling = (): void => {
+    if (disposed || restPollInterval !== null) return;
+    callbacks.onStatus('fallback');
+    void pollBinanceRestOnce();
+    restPollInterval = window.setInterval(() => {
+      void pollBinanceRestOnce();
+    }, 10_000);
   };
 
   const connect = (): void => {
@@ -310,7 +306,7 @@ export function createBinanceMiniTickerStream(
     try {
       ws = new WebSocket(`${BINANCE_WS_BASE}/!miniTicker@arr`);
     } catch {
-      startFallbackSimulator();
+      startRestFallbackPolling();
       return;
     }
 
@@ -321,7 +317,7 @@ export function createBinanceMiniTickerStream(
         } catch {
           // ignore close errors
         }
-        startFallbackSimulator();
+        startRestFallbackPolling();
       }
     }, 5500);
 
@@ -332,7 +328,7 @@ export function createBinanceMiniTickerStream(
         connectTimeout = null;
       }
       retryCount = 0;
-      stopFallback();
+      stopRestPoll();
       callbacks.onStatus('connected');
     };
 
@@ -372,7 +368,7 @@ export function createBinanceMiniTickerStream(
 
     ws.onerror = () => {
       if (disposed) return;
-      startFallbackSimulator();
+      startRestFallbackPolling();
     };
 
     ws.onclose = () => {
@@ -383,7 +379,7 @@ export function createBinanceMiniTickerStream(
       }
       retryCount += 1;
       if (retryCount >= 2) {
-        startFallbackSimulator();
+        startRestFallbackPolling();
       } else {
         callbacks.onStatus('reconnecting');
       }
@@ -396,7 +392,7 @@ export function createBinanceMiniTickerStream(
 
   return () => {
     disposed = true;
-    stopFallback();
+    stopRestPoll();
     if (reconnectTimer !== null) {
       window.clearTimeout(reconnectTimer);
       reconnectTimer = null;

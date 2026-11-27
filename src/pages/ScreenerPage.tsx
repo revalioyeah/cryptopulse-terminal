@@ -243,6 +243,7 @@ export function ScreenerPage() {
                 <th className="px-3 py-3 text-right">
                   <button
                     type="button"
+                    title="Rasio volume 24H real Binance terhadap baseline likuiditas"
                     onClick={() => handleSort('volumeSpikeRatio')}
                     className="inline-flex items-center gap-1 hover:text-[#EAECEF]"
                   >
@@ -252,19 +253,21 @@ export function ScreenerPage() {
                 <th className="px-3 py-3 text-right">
                   <button
                     type="button"
+                    title="Estimasi cepat dari rentang & momentum 24H Binance Spot; untuk RSI 14 candle real gunakan Auto-Signal Pro / Tab Analisa Coin"
                     onClick={() => handleSort('rsi14')}
                     className="inline-flex items-center gap-1 hover:text-[#EAECEF]"
                   >
-                    RSI (14) {renderSortIcon('rsi14')}
+                    RSI (Est.) {renderSortIcon('rsi14')}
                   </button>
                 </th>
                 <th className="px-3 py-3 text-right">
                   <button
                     type="button"
+                    title="Proxy momentum flow 24H; untuk Open Interest Perpetual real-time buka Tab Analisa Coin (Gate.io/Bitget/Hyperliquid)"
                     onClick={() => handleSort('oiChange24h')}
                     className="inline-flex items-center gap-1 hover:text-[#EAECEF]"
                   >
-                    OI 24h {renderSortIcon('oiChange24h')}
+                    Flow/OI Est. {renderSortIcon('oiChange24h')}
                   </button>
                 </th>
                 <th className="px-3 py-3 text-right">Aksi</th>

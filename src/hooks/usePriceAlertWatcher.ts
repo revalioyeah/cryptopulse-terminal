@@ -11,11 +11,13 @@ import { formatPriceAlertTelegram } from '../utils/telegramFormatters';
  */
 export function usePriceAlertWatcher(): void {
   const coinsMap = useAppStore((s) => s.coinsMap);
+  const marketSource = useAppStore((s) => s.marketSource);
   const priceAlerts = useSettingsStore((s) => s.priceAlerts);
   const markAlertTriggered = useSettingsStore((s) => s.markAlertTriggered);
   const processingRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    if (marketSource !== 'live') return;
     const activeAlerts = priceAlerts.filter((a) => a.active && !a.triggered);
     if (activeAlerts.length === 0) return;
 

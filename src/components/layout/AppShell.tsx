@@ -4,13 +4,17 @@ import {
   Bell,
   Briefcase,
   CandlestickChart,
+  Cloud,
+  Download,
   LayoutDashboard,
   Radar,
   Settings,
   ShieldCheck,
+  Smartphone,
   Waves,
 } from 'lucide-react';
 import type { NavTabId } from '../../types';
+import { usePwaInstall } from '../../hooks/usePwaInstall';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useTradingStore } from '../../store/useTradingStore';
@@ -42,18 +46,32 @@ export function AppShell({ children }: AppShellProps) {
   const activeTab = useAppStore((s) => s.activeTab);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const wsStatus = useAppStore((s) => s.wsStatus);
+  const marketSource = useAppStore((s) => s.marketSource);
   const btcCoin = useAppStore((s) => s.coinsMap.BTCUSDT);
   const scannerRunning = useAppStore((s) => s.scannerRunning);
   const openPriceAlertsModal = useAppStore((s) => s.openPriceAlertsModal);
   const openSettingsModal = useAppStore((s) => s.openSettingsModal);
   const openAnalysis = useAppStore((s) => s.openAnalysis);
+  const pushToast = useAppStore((s) => s.pushToast);
+
+  const { canPromptInstall, promptInstall } = usePwaInstall();
 
   const scannerEnabled = useTradingStore((s) => s.scannerConfig.enabled);
   const activeAlertsCount = useSettingsStore(
     (s) => s.priceAlerts.filter((a) => a.active && !a.triggered).length,
   );
+  const cloudSyncActive = useSettingsStore(
+    (s) => Boolean(s.cloudSyncConfig.enabled && s.cloudSyncConfig.gistId),
+  );
 
   const btcPositive = (btcCoin?.priceChangePercent24h ?? 0) >= 0;
+
+  const handleQuickInstall = async () => {
+    const res = await promptInstall();
+    if (res === 'accepted') {
+      pushToast('Aplikasi Terpasang', 'CryptoPulse Terminal telah terpasang di perangkat Anda.', 'success');
+    }
+  };
 
   return (
     <div className="min-h-screen w-full overflow-x-hidden bg-[#0B0E11] text-[#EAECEF]">
@@ -84,19 +102,27 @@ export function AppShell({ children }: AppShellProps) {
               <span className="text-[11px] font-semibold uppercase tracking-wide text-[#848E9C]">
                 BTC / USDT
               </span>
-              <p className="font-mono tabular-nums text-sm font-semibold text-[#EAECEF]">
-                {formatPrice(btcCoin.price)}
-              </p>
+              {marketSource === 'loading' ? (
+                <div className="mt-1 h-4 w-20 animate-pulse rounded bg-[#1E2329]" />
+              ) : (
+                <p className="font-mono tabular-nums text-sm font-semibold text-[#EAECEF]">
+                  {formatPrice(btcCoin.price)}
+                </p>
+              )}
             </div>
-            <span
-              className={`font-mono tabular-nums rounded-md px-2 py-0.5 text-xs font-semibold ${
-                btcPositive
-                  ? 'bg-[#00C087]/15 text-[#00C087]'
-                  : 'bg-[#F6465D]/15 text-[#F6465D]'
-              }`}
-            >
-              {formatPercent(btcCoin.priceChangePercent24h)}
-            </span>
+            {marketSource === 'loading' ? (
+              <div className="h-5 w-12 animate-pulse rounded bg-[#1E2329]" />
+            ) : (
+              <span
+                className={`font-mono tabular-nums rounded-md px-2 py-0.5 text-xs font-semibold ${
+                  btcPositive
+                    ? 'bg-[#00C087]/15 text-[#00C087]'
+                    : 'bg-[#F6465D]/15 text-[#F6465D]'
+                }`}
+              >
+                {formatPercent(btcCoin.priceChangePercent24h)}
+              </span>
+            )}
           </button>
         )}
 
@@ -129,7 +155,7 @@ export function AppShell({ children }: AppShellProps) {
           })}
         </nav>
 
-        {/* Shortcuts: Price Alerts, Settings & Backup + WS Status */}
+        {/* Shortcuts: Price Alerts, Mobile Sync, Settings + WS Status */}
         <div className="space-y-2 border-t border-[#2B3139] p-3">
           <button
             id="btn-desktop-alerts"
@@ -147,9 +173,34 @@ export function AppShell({ children }: AppShellProps) {
           </button>
 
           <button
+            id="btn-desktop-sync"
+            type="button"
+            onClick={() => openSettingsModal('SYNC')}
+            className="flex min-h-[40px] w-full items-center justify-between rounded-xl border border-[#2B3139] bg-[#1E2329] px-3 text-xs font-medium text-[#EAECEF] transition hover:border-[#00C087]/60"
+          >
+            <span className="flex items-center gap-2">
+              {cloudSyncActive ? (
+                <Cloud className="h-4 w-4 text-[#00C087]" />
+              ) : (
+                <Smartphone className="h-4 w-4 text-[#F0B90B]" />
+              )}
+              <span>Sync Mobile</span>
+            </span>
+            <span
+              className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
+                cloudSyncActive
+                  ? 'bg-[#00C087]/15 text-[#00C087]'
+                  : 'bg-[#0B0E11] text-[#848E9C]'
+              }`}
+            >
+              {cloudSyncActive ? 'CLOUD' : 'PWA'}
+            </span>
+          </button>
+
+          <button
             id="btn-desktop-settings"
             type="button"
-            onClick={openSettingsModal}
+            onClick={() => openSettingsModal('TELEGRAM')}
             className="flex min-h-[40px] w-full items-center gap-2 rounded-xl border border-[#2B3139] bg-[#1E2329] px-3 text-xs font-medium text-[#EAECEF] transition hover:border-[#F0B90B]/50"
           >
             <Settings className="h-4 w-4 text-[#848E9C]" />
@@ -176,23 +227,56 @@ export function AppShell({ children }: AppShellProps) {
                 <span className="text-[10px] font-semibold uppercase tracking-wide text-[#848E9C]">
                   BTC
                 </span>
-                <span
-                  className={`font-mono tabular-nums text-[10px] font-semibold ${
-                    btcPositive ? 'text-[#00C087]' : 'text-[#F6465D]'
-                  }`}
-                >
-                  {formatPercent(btcCoin.priceChangePercent24h)}
-                </span>
+                {marketSource !== 'loading' && (
+                  <span
+                    className={`font-mono tabular-nums text-[10px] font-semibold ${
+                      btcPositive ? 'text-[#00C087]' : 'text-[#F6465D]'
+                    }`}
+                  >
+                    {formatPercent(btcCoin.priceChangePercent24h)}
+                  </span>
+                )}
               </div>
-              <span className="font-mono tabular-nums truncate text-xs font-bold text-[#EAECEF]">
-                {formatPrice(btcCoin.price)}
-              </span>
+              {marketSource === 'loading' ? (
+                <span className="mt-0.5 inline-block h-3.5 w-16 animate-pulse rounded bg-[#1E2329]" />
+              ) : (
+                <span className="font-mono tabular-nums truncate text-xs font-bold text-[#EAECEF]">
+                  {formatPrice(btcCoin.price)}
+                </span>
+              )}
             </button>
           )}
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
           <WsStatusBadge status={wsStatus} compact />
+
+          {canPromptInstall && (
+            <button
+              type="button"
+              onClick={() => void handleQuickInstall()}
+              aria-label="Install Aplikasi Mobile"
+              title="Install Aplikasi Mobile"
+              className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#00C087]/50 bg-[#00C087]/15 text-[#00C087]"
+            >
+              <Download className="h-4 w-4" />
+            </button>
+          )}
+
+          <button
+            id="btn-mobile-sync"
+            type="button"
+            onClick={() => openSettingsModal('SYNC')}
+            aria-label="Sync Mobile dan Cloud"
+            title="Sync Web & Mobile"
+            className={`relative flex h-10 w-10 items-center justify-center rounded-lg border ${
+              cloudSyncActive
+                ? 'border-[#00C087]/50 bg-[#00C087]/15 text-[#00C087]'
+                : 'border-[#2B3139] bg-[#1E2329] text-[#EAECEF]'
+            }`}
+          >
+            <Cloud className="h-4 w-4" />
+          </button>
 
           <button
             id="btn-mobile-alerts"
@@ -212,7 +296,7 @@ export function AppShell({ children }: AppShellProps) {
           <button
             id="btn-mobile-settings"
             type="button"
-            onClick={openSettingsModal}
+            onClick={() => openSettingsModal('TELEGRAM')}
             aria-label="Settings dan Backup"
             className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#2B3139] bg-[#1E2329] text-[#EAECEF]"
           >
