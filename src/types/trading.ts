@@ -149,13 +149,31 @@ export interface BacktestResult {
 }
 
 export type AutoSignalMode = 'FUTURES' | 'SPOT_DCA';
-export type AutoSignalRule = 'MOMENTUM_BREAKOUT' | 'RSI_OVERSOLD_BOUNCE' | 'HIGH_CONVICTION';
+export type AutoSignalRule =
+  | 'MOMENTUM_BREAKOUT'
+  | 'EMA_PULLBACK'
+  | 'RSI_OVERSOLD_BOUNCE'
+  | 'HIGH_CONVICTION';
+export type ScannerDirectionFilter = 'BOTH' | 'LONG_ONLY' | 'SHORT_ONLY';
+export type ScannerUniverseScope = 'ALL_LIQUID' | 'TOP_100' | 'WATCHLIST';
 
 export interface AutoSignalConfig {
   enabled: boolean;
-  intervalSeconds: number; // e.g., 30, 60, 180
+  intervalSeconds: number; // e.g., 45, 60, 180, 300, 900
   mode: AutoSignalMode;
   rule: AutoSignalRule;
+  timeframe: '15m' | '1h' | '4h';
+  directionFilter: ScannerDirectionFilter;
+  universeScope: ScannerUniverseScope;
+  minVolume24hUsd: number;
+  minBacktestGrade: BacktestGrade;
+  minProfitFactor: number;
+  minConfluenceScore: number;
+  requireBtcAlignment: boolean;
+  defaultLeverage: number;
+  minSpotScore: number;
+  minMcapFdvRatio: number; // e.g., 0.55 = 55% minimum float
+  autoAddWatchlist: boolean;
   cooldownSeconds: number; // 30s to 14400s (4h)
   autoSendTelegram: boolean;
   autoSaveJournal: boolean;
@@ -171,14 +189,120 @@ export interface AutoSignalLog {
   mode: AutoSignalMode;
   rule: AutoSignalRule;
   direction: TradeDirection | 'ACCUMULATE';
+  timeframe?: Timeframe;
   entryPrice: number;
   stopLoss?: number;
   takeProfit?: number;
+  rrRatio?: number;
+  confluenceScore?: number;
+  rsiReal?: number;
+  adxReal?: number;
+  mcapFdvPercent?: number;
+  rsVsBtc7d?: number;
+  reasons?: string[];
   scoreOrGrade: string;
   summary: string;
   telegramSent: boolean;
   savedToJournal: boolean;
   createdAt: number;
+}
+
+export interface FuturesScanCandidateAudit {
+  symbol: string;
+  baseAsset: string;
+  direction: TradeDirection;
+  passed: boolean;
+  confluenceScore: number;
+  backtestGrade: BacktestGrade;
+  profitFactor: number;
+  winRate: number;
+  rsi14: number;
+  adx14: number;
+  volumeRatio: number;
+  htfTrend: 'Bullish' | 'Bearish' | 'Sideways';
+  btcAligned: boolean;
+  rrToResistance: number;
+  reasons: string[];
+  rejectReason?: string;
+}
+
+export interface FuturesScanReport {
+  scannedAt: number;
+  timeframe: '15m' | '1h' | '4h';
+  htfTimeframe: '1h' | '4h' | '1d';
+  rule: AutoSignalRule;
+  universeCount: number;
+  evaluatedCount: number;
+  passedCount: number;
+  btcHtfTrend: 'Bullish' | 'Bearish' | 'Sideways';
+  audits: FuturesScanCandidateAudit[];
+}
+
+export type SpotFunnelStage =
+  | 'WATCHLIST_READY'
+  | 'FAILED_TREND'
+  | 'FAILED_TOKENOMICS'
+  | 'FAILED_OUTPERFORMANCE';
+
+export interface SpotFunnelCandidate {
+  symbol: string;
+  baseAsset: string;
+  name: string;
+  sector: string;
+  price: number;
+  marketCapRank: number;
+  marketCapUsd: number;
+  fdvUsd: number;
+  quoteVolume24h: number;
+  // Stage 1: Outperformance vs BTC
+  change24h: number;
+  change7d: number;
+  change30d: number;
+  rsVsBtc24h: number;
+  rsVsBtc7d: number;
+  rsVsBtc30d: number;
+  outperformanceScore: number;
+  passedOutperformance: boolean;
+  // Stage 2: Tokenomics
+  mcapFdvRatio: number; // 0..1
+  hasMaxSupply: boolean;
+  hasUpcomingHeavyUnlock: boolean;
+  tokenomicsScore: number;
+  tokenomicsNote: string;
+  passedTokenomics: boolean;
+  // Stage 3: Real 1D + 4H Trend
+  trend1d?: 'Bullish' | 'Bearish' | 'Sideways';
+  trend4h?: 'Bullish' | 'Bearish' | 'Sideways';
+  rsi1d?: number;
+  rsi4h?: number;
+  emaStructure1d?: string;
+  trendScore?: number;
+  passedTrend: boolean;
+  // Stage 4: Layak Watchlist + DCA Plan
+  finalScore: number;
+  tier?: 'Core' | 'Growth' | 'High-Risk';
+  projectedAvgEntry?: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
+  sellPercentAtTp2?: number;
+  stageReached: SpotFunnelStage;
+  rejectReason?: string;
+  highlights: string[];
+}
+
+export interface SpotFunnelReport {
+  scannedAt: number;
+  initialCount: number;
+  afterOutperformance: number;
+  afterTokenomics: number;
+  afterTrend: number;
+  watchlistReady: number;
+  btcBench24h: number;
+  btcBench7d: number;
+  btcBench30d: number;
+  isTokenomicsFallback: boolean;
+  candidates: SpotFunnelCandidate[];
 }
 
 export interface DerivativesSnapshot {

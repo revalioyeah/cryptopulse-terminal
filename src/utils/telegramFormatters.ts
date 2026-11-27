@@ -65,21 +65,50 @@ export function formatSpotSetupTelegram(setup: SpotSetup): string {
 }
 
 /**
- * 3. Formatter HTML khusus Auto-Signal Scanner Bot
+ * 3. Formatter HTML khusus Auto-Signal Scanner Bot (Pro)
  */
 export function formatAutoScannerTelegram(log: AutoSignalLog): string {
-  const modeLabel = log.mode === 'FUTURES' ? 'FUTURES (Backtest+ATR)' : 'SPOT DCA (3-Layer)';
+  const modeLabel =
+    log.mode === 'FUTURES'
+      ? `FUTURES PRO (${(log.timeframe ?? '1h').toUpperCase()})`
+      : 'SPOT 100-COIN FUNNEL (3-Layer DCA)';
   const icon = log.direction === 'SHORT' ? '🔴' : log.direction === 'ACCUMULATE' ? '🟡' : '🟢';
 
+  const metricsLine =
+    log.mode === 'FUTURES'
+      ? [
+          log.rsiReal !== undefined ? `RSI(14): <code>${log.rsiReal}</code>` : '',
+          log.adxReal !== undefined ? `ADX: <code>${log.adxReal}</code>` : '',
+          log.rrRatio !== undefined ? `R:R TP2: <code>1:${log.rrRatio.toFixed(2)}</code>` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ')
+      : [
+          log.rsVsBtc7d !== undefined
+            ? `RS vs BTC 7D: <code>${log.rsVsBtc7d >= 0 ? '+' : ''}${log.rsVsBtc7d}%</code>`
+            : '',
+          log.mcapFdvPercent !== undefined ? `Float MCap/FDV: <code>${log.mcapFdvPercent}%</code>` : '',
+          log.rsiReal !== undefined ? `RSI 1D: <code>${log.rsiReal}</code>` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ');
+
+  const reasonsBlock =
+    log.reasons && log.reasons.length > 0
+      ? `Konfluensi:\n${log.reasons.map((r) => `• ${escapeHtml(r)}`).join('\n')}`
+      : '';
+
   return [
-    `${icon} <b>AUTO-SCANNER SIGNAL — ${escapeHtml(log.symbol)}</b>`,
-    `Mode: <code>${modeLabel}</code>`,
-    `Rule: <code>${escapeHtml(log.rule)}</code> | Skor/Grade: <b>${escapeHtml(log.scoreOrGrade)}</b>`,
+    `${icon} <b>CRYPTOPULSE SCANNER PRO — ${escapeHtml(log.symbol)}</b>`,
+    `Mode: <code>${escapeHtml(modeLabel)}</code>`,
+    `Rule: <code>${escapeHtml(log.rule)}</code> | <b>${escapeHtml(log.scoreOrGrade)}</b>`,
     '────────────────────',
     `Arah: <b>${log.direction}</b>`,
-    `Harga Trigger: <code>${formatPrice(log.entryPrice)}</code>`,
-    log.stopLoss ? `SL Estimasi: <code>${formatPrice(log.stopLoss)}</code>` : '',
-    log.takeProfit ? `TP Utama: <code>${formatPrice(log.takeProfit)}</code>` : '',
+    `Harga Trigger / Avg DCA: <code>${formatPrice(log.entryPrice)}</code>`,
+    log.stopLoss ? `Stop Loss (Struktur+ATR): <code>${formatPrice(log.stopLoss)}</code>` : '',
+    log.takeProfit ? `Target TP2 Utama: <code>${formatPrice(log.takeProfit)}</code>` : '',
+    metricsLine,
+    reasonsBlock,
     `Ringkasan: <i>${escapeHtml(log.summary)}</i>`,
   ]
     .filter(Boolean)

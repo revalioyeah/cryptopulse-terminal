@@ -3,6 +3,7 @@ import { AppShell } from './components/layout/AppShell';
 import { PriceAlertsModal } from './components/modals/PriceAlertsModal';
 import { SettingsBackupModal } from './components/modals/SettingsBackupModal';
 import { useBinanceStream } from './hooks/useBinanceStream';
+import { useGlobalAutoScanner } from './hooks/useAutoScanner';
 import { usePriceAlertWatcher } from './hooks/usePriceAlertWatcher';
 import { AnalysisPage } from './pages/AnalysisPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -24,6 +25,7 @@ const queryClient = new QueryClient({
 function TerminalApp() {
   useBinanceStream();
   usePriceAlertWatcher();
+  useGlobalAutoScanner();
 
   const activeTab = useAppStore((s) => s.activeTab);
 

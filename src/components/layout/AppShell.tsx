@@ -13,6 +13,7 @@ import {
 import type { NavTabId } from '../../types';
 import { useAppStore } from '../../store/useAppStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
+import { useTradingStore } from '../../store/useTradingStore';
 import { formatPercent, formatPrice } from '../../utils/format';
 import { WsStatusBadge } from './WsStatusBadge';
 import { ToastContainer } from '../ui/ToastContainer';
@@ -42,10 +43,12 @@ export function AppShell({ children }: AppShellProps) {
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const wsStatus = useAppStore((s) => s.wsStatus);
   const btcCoin = useAppStore((s) => s.coinsMap.BTCUSDT);
+  const scannerRunning = useAppStore((s) => s.scannerRunning);
   const openPriceAlertsModal = useAppStore((s) => s.openPriceAlertsModal);
   const openSettingsModal = useAppStore((s) => s.openSettingsModal);
   const openAnalysis = useAppStore((s) => s.openAnalysis);
 
+  const scannerEnabled = useTradingStore((s) => s.scannerConfig.enabled);
   const activeAlertsCount = useSettingsStore(
     (s) => s.priceAlerts.filter((a) => a.active && !a.triggered).length,
   );
@@ -115,6 +118,12 @@ export function AppShell({ children }: AppShellProps) {
               >
                 <Icon className={`h-4 w-4 shrink-0 ${isActive ? 'text-[#F0B90B]' : ''}`} />
                 <span className="truncate">{label}</span>
+                {id === 'screener' && (scannerEnabled || scannerRunning) && (
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-[#00C087]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[#00C087]">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#00C087]" />
+                    {scannerRunning ? 'Scan' : 'ON'}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -237,7 +246,12 @@ export function AppShell({ children }: AppShellProps) {
                   isActive ? 'text-[#F0B90B]' : 'text-[#848E9C]'
                 }`}
               >
-                <Icon className={`h-4 w-4 ${isActive ? 'text-[#F0B90B]' : ''}`} />
+                <span className="relative">
+                  <Icon className={`h-4 w-4 ${isActive ? 'text-[#F0B90B]' : ''}`} />
+                  {id === 'screener' && (scannerEnabled || scannerRunning) && (
+                    <span className="absolute -right-1 -top-1 h-2 w-2 animate-pulse rounded-full bg-[#00C087]" />
+                  )}
+                </span>
                 <span className="max-w-full truncate">{mobileLabel}</span>
               </button>
             );

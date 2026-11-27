@@ -20,6 +20,7 @@ export interface TradingPersistedData {
 
 interface TradingState extends TradingPersistedData {
   toggleWatchlist: (symbol: string) => boolean;
+  addToWatchlistBatch: (symbols: string[]) => number;
   addFuturesSetup: (setup: TradeSetup) => void;
   updateFuturesSetupStatus: (id: string, status: SetupStatus, realizedPnlUsdt?: number) => void;
   deleteFuturesSetup: (id: string) => void;
@@ -40,10 +41,22 @@ interface TradingState extends TradingPersistedData {
 
 const DEFAULT_SCANNER_CONFIG: AutoSignalConfig = {
   enabled: false,
-  intervalSeconds: 45,
+  intervalSeconds: 180,
   mode: 'FUTURES',
-  rule: 'MOMENTUM_BREAKOUT',
-  cooldownSeconds: 300,
+  rule: 'HIGH_CONVICTION',
+  timeframe: '1h',
+  directionFilter: 'BOTH',
+  universeScope: 'TOP_100',
+  minVolume24hUsd: 10_000_000,
+  minBacktestGrade: 'B+',
+  minProfitFactor: 1.15,
+  minConfluenceScore: 65,
+  requireBtcAlignment: true,
+  defaultLeverage: 5,
+  minSpotScore: 68,
+  minMcapFdvRatio: 0.55,
+  autoAddWatchlist: false,
+  cooldownSeconds: 900,
   autoSendTelegram: false,
   autoSaveJournal: false,
   defaultFuturesEquity: 5000,
@@ -181,6 +194,17 @@ export const useTradingStore = create<TradingState>()(
         return !exists;
       },
 
+      addToWatchlistBatch: (symbols) => {
+        const current = get().watchlist;
+        const existing = new Set(current);
+        const toAdd = symbols.filter((s) => !existing.has(s));
+        if (toAdd.length === 0) return 0;
+        set((state) => ({
+          watchlist: [...toAdd, ...state.watchlist],
+        }));
+        return toAdd.length;
+      },
+
       addFuturesSetup: (setup) =>
         set((state) => ({
           futuresSetups: [setup, ...state.futuresSetups],
@@ -272,6 +296,17 @@ export const useTradingStore = create<TradingState>()(
     }),
     {
       name: 'cryptopulse-trading-v1',
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<TradingState>;
+        return {
+          ...currentState,
+          ...persisted,
+          scannerConfig: {
+            ...DEFAULT_SCANNER_CONFIG,
+            ...(persisted.scannerConfig ?? {}),
+          },
+        };
+      },
     },
   ),
 );

@@ -89,3 +89,21 @@ export interface MiniTickerPayload {
   quoteVolume: number;
   eventTime: number;
 }
+
+export interface CoinTokenomicsRecord {
+  symbol: string; // e.g., 'SOLUSDT'
+  baseAsset: string; // e.g., 'SOL'
+  name: string;
+  marketCapRank: number;
+  marketCapUsd: number;
+  fdvUsd: number;
+  mcapToFdvRatio: number; // 0..1 (e.g., 0.85 = 85% circulating float)
+  circulatingSupply: number;
+  totalSupply: number | null;
+  maxSupply: number | null;
+  change24hPercent: number;
+  change7dPercent: number;
+  change30dPercent: number;
+  athChangePercent: number;
+  isFallback: boolean;
+}

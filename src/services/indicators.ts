@@ -296,3 +296,279 @@ export function evaluateSingleTimeframeTrend(
     emaAlignment,
   };
 }
+
+export interface MacdPoint {
+  time: number;
+  macd: number;
+  signal: number;
+  histogram: number;
+}
+
+export function calculateMACD(
+  candles: Candle[],
+  fastPeriod = 12,
+  slowPeriod = 26,
+  signalPeriod = 9,
+): MacdPoint[] {
+  if (candles.length < slowPeriod + signalPeriod) return [];
+  const fastEma = calculateEMA(candles, fastPeriod);
+  const slowEma = calculateEMA(candles, slowPeriod);
+  const fastMap = new Map(fastEma.map((p) => [p.time, p.value]));
+
+  const macdRaw: Array<{ time: number; value: number }> = [];
+  for (const s of slowEma) {
+    const f = fastMap.get(s.time);
+    if (f !== undefined) {
+      macdRaw.push({ time: s.time, value: f - s.value });
+    }
+  }
+  if (macdRaw.length < signalPeriod) return [];
+
+  const k = 2 / (signalPeriod + 1);
+  let signalEma =
+    macdRaw.slice(0, signalPeriod).reduce((acc, p) => acc + p.value, 0) / signalPeriod;
+
+  const result: MacdPoint[] = [
+    {
+      time: macdRaw[signalPeriod - 1].time,
+      macd: macdRaw[signalPeriod - 1].value,
+      signal: signalEma,
+      histogram: macdRaw[signalPeriod - 1].value - signalEma,
+    },
+  ];
+
+  for (let i = signalPeriod; i < macdRaw.length; i++) {
+    signalEma = macdRaw[i].value * k + signalEma * (1 - k);
+    result.push({
+      time: macdRaw[i].time,
+      macd: macdRaw[i].value,
+      signal: signalEma,
+      histogram: macdRaw[i].value - signalEma,
+    });
+  }
+  return result;
+}
+
+export interface AdxResult {
+  adx: number;
+  plusDI: number;
+  minusDI: number;
+}
+
+export function calculateADX(candles: Candle[], period = 14): AdxResult {
+  if (candles.length <= period * 2) {
+    return { adx: 18, plusDI: 20, minusDI: 20 };
+  }
+
+  const trList: number[] = [];
+  const plusDmList: number[] = [];
+  const minusDmList: number[] = [];
+
+  for (let i = 1; i < candles.length; i++) {
+    const cur = candles[i];
+    const prev = candles[i - 1];
+    const upMove = cur.high - prev.high;
+    const downMove = prev.low - cur.low;
+    const plusDM = upMove > downMove && upMove > 0 ? upMove : 0;
+    const minusDM = downMove > upMove && downMove > 0 ? downMove : 0;
+    const tr = Math.max(
+      cur.high - cur.low,
+      Math.abs(cur.high - prev.close),
+      Math.abs(cur.low - prev.close),
+    );
+    trList.push(tr);
+    plusDmList.push(plusDM);
+    minusDmList.push(minusDM);
+  }
+
+  let smoothTR = trList.slice(0, period).reduce((a, b) => a + b, 0);
+  let smoothPlus = plusDmList.slice(0, period).reduce((a, b) => a + b, 0);
+  let smoothMinus = minusDmList.slice(0, period).reduce((a, b) => a + b, 0);
+
+  const dxValues: number[] = [];
+  let lastPlusDI = 20;
+  let lastMinusDI = 20;
+
+  for (let i = period; i < trList.length; i++) {
+    smoothTR = smoothTR - smoothTR / period + trList[i];
+    smoothPlus = smoothPlus - smoothPlus / period + plusDmList[i];
+    smoothMinus = smoothMinus - smoothMinus / period + minusDmList[i];
+
+    const plusDI = smoothTR > 0 ? (smoothPlus / smoothTR) * 100 : 0;
+    const minusDI = smoothTR > 0 ? (smoothMinus / smoothTR) * 100 : 0;
+    const denom = plusDI + minusDI;
+    const dx = denom > 0 ? (Math.abs(plusDI - minusDI) / denom) * 100 : 0;
+    dxValues.push(dx);
+    lastPlusDI = plusDI;
+    lastMinusDI = minusDI;
+  }
+
+  if (dxValues.length < period) {
+    return { adx: 18, plusDI: Number(lastPlusDI.toFixed(1)), minusDI: Number(lastMinusDI.toFixed(1)) };
+  }
+
+  let adx = dxValues.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < dxValues.length; i++) {
+    adx = (adx * (period - 1) + dxValues[i]) / period;
+  }
+
+  return {
+    adx: Number(adx.toFixed(1)),
+    plusDI: Number(lastPlusDI.toFixed(1)),
+    minusDI: Number(lastMinusDI.toFixed(1)),
+  };
+}
+
+export function calculateRollingVWAP(candles: Candle[], lookback = 24): number {
+  if (candles.length === 0) return 0;
+  const slice = candles.slice(-lookback);
+  let pvSum = 0;
+  let volSum = 0;
+  for (const c of slice) {
+    const typical = (c.high + c.low + c.close) / 3;
+    pvSum += typical * c.volume;
+    volSum += c.volume;
+  }
+  return volSum > 0 ? pvSum / volSum : slice[slice.length - 1].close;
+}
+
+export interface BollingerBandSnapshot {
+  upper: number;
+  middle: number;
+  lower: number;
+  bandwidthPercent: number;
+  percentB: number; // 0 = lower band, 0.5 = middle, 1 = upper band
+}
+
+export function calculateBollingerBands(
+  candles: Candle[],
+  period = 20,
+  stdDevMul = 2,
+): BollingerBandSnapshot {
+  const slice = candles.slice(-period);
+  if (slice.length === 0) {
+    return { upper: 0, middle: 0, lower: 0, bandwidthPercent: 0, percentB: 0.5 };
+  }
+  const closes = slice.map((c) => c.close);
+  const mean = closes.reduce((a, b) => a + b, 0) / closes.length;
+  const variance = closes.reduce((acc, v) => acc + (v - mean) ** 2, 0) / closes.length;
+  const std = Math.sqrt(variance);
+  const upper = mean + stdDevMul * std;
+  const lower = mean - stdDevMul * std;
+  const lastClose = closes[closes.length - 1];
+  const bandwidthPercent = mean > 0 ? ((upper - lower) / mean) * 100 : 0;
+  const percentB = upper > lower ? (lastClose - lower) / (upper - lower) : 0.5;
+
+  return {
+    upper,
+    middle: mean,
+    lower,
+    bandwidthPercent: Number(bandwidthPercent.toFixed(2)),
+    percentB: Number(percentB.toFixed(2)),
+  };
+}
+
+export function calculateCandleVolumeRatio(candles: Candle[], lookback = 20): number {
+  if (candles.length < lookback + 1) return 1;
+  const target = candles[candles.length - 1];
+  const prev = candles.slice(-(lookback + 1), -1);
+  const avgVol = prev.reduce((acc, c) => acc + c.volume, 0) / Math.max(prev.length, 1);
+  if (avgVol <= 0) return 1;
+  return Number((target.volume / avgVol).toFixed(2));
+}
+
+export interface MarketStructureResult {
+  structure: 'UPTREND_HH_HL' | 'DOWNTREND_LH_LL' | 'SQUEEZE' | 'RANGE';
+  recentHigh: number;
+  recentLow: number;
+  bosBullish: boolean;
+  bosBearish: boolean;
+}
+
+export function detectMarketStructure(candles: Candle[]): MarketStructureResult {
+  if (candles.length < 24) {
+    const close = candles[candles.length - 1]?.close ?? 0;
+    return {
+      structure: 'RANGE',
+      recentHigh: close,
+      recentLow: close,
+      bosBullish: false,
+      bosBearish: false,
+    };
+  }
+  const seg = candles.slice(-25);
+  const prev20 = seg.slice(0, 20);
+  const firstHalf = seg.slice(0, 12);
+  const secondHalf = seg.slice(12, 24);
+  const lastBar = seg[seg.length - 1];
+
+  const h1 = Math.max(...firstHalf.map((c) => c.high));
+  const h2 = Math.max(...secondHalf.map((c) => c.high));
+  const l1 = Math.min(...firstHalf.map((c) => c.low));
+  const l2 = Math.min(...secondHalf.map((c) => c.low));
+
+  const recentHigh = Math.max(...prev20.map((c) => c.high));
+  const recentLow = Math.min(...prev20.map((c) => c.low));
+
+  let structure: MarketStructureResult['structure'] = 'RANGE';
+  if (h2 > h1 && l2 > l1) structure = 'UPTREND_HH_HL';
+  else if (h2 < h1 && l2 < l1) structure = 'DOWNTREND_LH_LL';
+  else if (h2 < h1 && l2 > l1) structure = 'SQUEEZE';
+
+  return {
+    structure,
+    recentHigh,
+    recentLow,
+    bosBullish: lastBar.close > recentHigh,
+    bosBearish: lastBar.close < recentLow,
+  };
+}
+
+export function detectRsiDivergence(
+  candles: Candle[],
+  rsiSeries: SeriesPoint[],
+): 'BULLISH' | 'BEARISH' | 'NONE' {
+  if (candles.length < 30 || rsiSeries.length < 25) return 'NONE';
+  const rsiMap = new Map(rsiSeries.map((p) => [p.time, p.value]));
+  const seg = candles.slice(-26);
+  const first = seg.slice(0, 13);
+  const second = seg.slice(13);
+
+  // Find swing low in each half for bullish divergence
+  let low1 = first[0];
+  for (const c of first) if (c.low < low1.low) low1 = c;
+  let low2 = second[0];
+  for (const c of second) if (c.low < low2.low) low2 = c;
+
+  const rsiLow1 = rsiMap.get(low1.time);
+  const rsiLow2 = rsiMap.get(low2.time);
+  if (
+    rsiLow1 !== undefined &&
+    rsiLow2 !== undefined &&
+    low2.low < low1.low * 0.998 &&
+    rsiLow2 > rsiLow1 + 2.5 &&
+    rsiLow1 < 42
+  ) {
+    return 'BULLISH';
+  }
+
+  // Find swing high in each half for bearish divergence
+  let high1 = first[0];
+  for (const c of first) if (c.high > high1.high) high1 = c;
+  let high2 = second[0];
+  for (const c of second) if (c.high > high2.high) high2 = c;
+
+  const rsiHigh1 = rsiMap.get(high1.time);
+  const rsiHigh2 = rsiMap.get(high2.time);
+  if (
+    rsiHigh1 !== undefined &&
+    rsiHigh2 !== undefined &&
+    high2.high > high1.high * 1.002 &&
+    rsiHigh2 < rsiHigh1 - 2.5 &&
+    rsiHigh1 > 58
+  ) {
+    return 'BEARISH';
+  }
+
+  return 'NONE';
+}

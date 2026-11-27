@@ -1,10 +1,12 @@
 import { create } from 'zustand';
 import type {
   Coin,
+  FuturesScanReport,
   MiniTickerPayload,
   NavTabId,
   ScreenerPreset,
   SectorName,
+  SpotFunnelReport,
   ToastItem,
   ToastVariant,
   WsConnectionStatus,
@@ -26,6 +28,14 @@ interface AppState {
   settingsModalOpen: boolean;
   toasts: ToastItem[];
 
+  // Shared global scanner runtime state (survives tab switches)
+  scannerRunning: boolean;
+  scannerProgressText: string;
+  scannerProgressPct: number;
+  lastScanAt: number | null;
+  lastFuturesReport: FuturesScanReport | null;
+  lastSpotFunnelReport: SpotFunnelReport | null;
+
   setActiveTab: (tab: NavTabId) => void;
   setSelectedSymbol: (symbol: string) => void;
   setSetupMode: (mode: 'FUTURES' | 'SPOT') => void;
@@ -34,6 +44,15 @@ interface AppState {
   setWsStatus: (status: WsConnectionStatus) => void;
   seedCoins: (coins: Coin[]) => void;
   applyMiniTicks: (ticks: MiniTickerPayload[]) => void;
+
+  setScannerRuntime: (partial: {
+    scannerRunning?: boolean;
+    scannerProgressText?: string;
+    scannerProgressPct?: number;
+    lastScanAt?: number | null;
+    lastFuturesReport?: FuturesScanReport | null;
+    lastSpotFunnelReport?: SpotFunnelReport | null;
+  }) => void;
 
   openAnalysis: (symbol: string) => void;
   openScreenerForSector: (sector: SectorName | 'ALL') => void;
@@ -64,12 +83,20 @@ export const useAppStore = create<AppState>((set) => ({
   settingsModalOpen: false,
   toasts: [],
 
+  scannerRunning: false,
+  scannerProgressText: '',
+  scannerProgressPct: 0,
+  lastScanAt: null,
+  lastFuturesReport: null,
+  lastSpotFunnelReport: null,
+
   setActiveTab: (tab) => set({ activeTab: tab }),
   setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
   setSetupMode: (mode) => set({ setupMode: mode }),
   setScreenerSectorFilter: (sector) => set({ screenerSectorFilter: sector }),
   setScreenerPreset: (preset) => set({ screenerPreset: preset }),
   setWsStatus: (status) => set({ wsStatus: status }),
+  setScannerRuntime: (partial) => set(partial),
 
   seedCoins: (coins) => {
     const coinsMap: Record<string, Coin> = {};
