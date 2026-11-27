@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react';
-import { FlaskConical, Sparkles } from 'lucide-react';
+import { Award, FlaskConical, Sparkles } from 'lucide-react';
 import type { BacktestResult, BacktestStrategyId, Coin, Timeframe } from '../../types';
 import { useBinanceKlinesQuery } from '../../hooks/useMarketQueries';
-import { runBacktest } from '../../services/backtestEngine';
+import { compareBacktestStrategies } from '../../services/setupAdvisor';
 import { formatPercent, formatPrice } from '../../utils/format';
 import { EquityCurveChart } from './EquityCurveChart';
 
@@ -45,17 +45,18 @@ export function BacktestPanel({ coin, onApplyToSetup }: BacktestPanelProps) {
   const klinesQuery = useBinanceKlinesQuery(coin.symbol, timeframe, 500, coin.price);
   const candles = klinesQuery.data?.candles ?? [];
 
+  // Compare all 3 strategies simultaneously on real closed candles so trader picks the highest edge
+  const comparison = useMemo(() => {
+    if (candles.length < 80) return [];
+    return compareBacktestStrategies(candles, coin.symbol, timeframe, targetRR, atrMultiplier);
+  }, [candles, coin.symbol, timeframe, targetRR, atrMultiplier]);
+
   const result = useMemo<BacktestResult | null>(() => {
-    if (candles.length < 80) return null;
-    return runBacktest(candles, {
-      symbol: coin.symbol,
-      strategy,
-      timeframe,
-      targetRR,
-      atrMultiplier,
-      feeRate: 0.001, // 0.1% fee deduction
-    });
-  }, [candles, coin.symbol, strategy, timeframe, targetRR, atrMultiplier]);
+    const found = comparison.find((c) => c.strategy === strategy);
+    return found?.result ?? null;
+  }, [comparison, strategy]);
+
+  const bestItem = comparison[0] ?? null;
 
   const gradeBadge = (grade: BacktestResult['grade']) => {
     if (grade === 'A+' || grade === 'A') return 'bg-[#00C087]/20 text-[#00C087] border-[#00C087]/40';
@@ -73,22 +74,35 @@ export function BacktestPanel({ coin, onApplyToSetup }: BacktestPanelProps) {
               Backtest-First Strategy Engine ({coin.baseAsset}/USDT)
             </h2>
             <p className="text-[11px] text-[#848E9C]">
-              Anti look-ahead bias (entry di open bar berikut) · Fee 0.1% · {candles.length} candle historis
+              Anti look-ahead bias (entry open bar berikut) · Fee 0.1% · {candles.length} candle historis real
             </p>
           </div>
         </div>
 
-        {result && (
-          <button
-            id="btn-apply-backtest"
-            type="button"
-            onClick={() => onApplyToSetup(result)}
-            className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#F0B90B] px-3.5 text-xs font-semibold text-[#0B0E11] transition hover:bg-[#F0B90B]/90"
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            <span>1-Klik Terapkan ke Setup</span>
-          </button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          {bestItem && bestItem.strategy !== strategy && bestItem.result.profitFactor > (result?.profitFactor ?? 0) && (
+            <button
+              type="button"
+              onClick={() => setStrategy(bestItem.strategy)}
+              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-[#00C087]/50 bg-[#00C087]/10 px-3 text-xs font-semibold text-[#00C087] transition hover:bg-[#00C087] hover:text-[#0B0E11]"
+            >
+              <Award className="h-3.5 w-3.5" />
+              <span>Pakai Terbaik: {bestItem.label} ({bestItem.result.grade})</span>
+            </button>
+          )}
+
+          {result && (
+            <button
+              id="btn-apply-backtest"
+              type="button"
+              onClick={() => onApplyToSetup(result)}
+              className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#F0B90B] px-3.5 text-xs font-semibold text-[#0B0E11] transition hover:bg-[#F0B90B]/90"
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              <span>1-Klik Terapkan ke Setup</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Controls */}
@@ -177,15 +191,62 @@ export function BacktestPanel({ coin, onApplyToSetup }: BacktestPanelProps) {
         </div>
       </div>
 
+      {/* 3-Strategy Quick Comparison Strip */}
+      {comparison.length > 0 && (
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {comparison.map((item, idx) => {
+            const selected = item.strategy === strategy;
+            const isTop = idx === 0;
+            return (
+              <button
+                key={item.strategy}
+                type="button"
+                onClick={() => setStrategy(item.strategy)}
+                className={`flex min-h-[46px] items-center justify-between gap-2 rounded-xl border px-3 py-2 text-left transition ${
+                  selected
+                    ? 'border-[#F0B90B] bg-[#F0B90B]/10'
+                    : 'border-[#2B3139] bg-[#0B0E11] hover:border-[#F0B90B]/40'
+                }`}
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate text-xs font-semibold text-[#EAECEF]">
+                      {item.label}
+                    </span>
+                    {isTop && (
+                      <span className="rounded bg-[#00C087]/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-[#00C087]">
+                        Top Edge
+                      </span>
+                    )}
+                  </div>
+                  <p className="font-mono tabular-nums text-[10px] text-[#848E9C]">
+                    PF {item.result.profitFactor.toFixed(2)} · Exp{' '}
+                    {item.result.expectancyR >= 0 ? '+' : ''}
+                    {item.result.expectancyR.toFixed(2)}R · {item.result.totalTrades} trade
+                  </p>
+                </div>
+                <span
+                  className={`font-mono tabular-nums shrink-0 rounded-md border px-2 py-0.5 text-xs font-bold ${gradeBadge(
+                    item.result.grade,
+                  )}`}
+                >
+                  {item.result.grade}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Results Summary */}
       {result ? (
-        <div className="mt-4 space-y-3">
-          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
-            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
+        <div className="mt-3.5 space-y-3">
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 lg:grid-cols-8">
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-2.5">
               <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">Grade</span>
               <div className="mt-1">
                 <span
-                  className={`font-mono tabular-nums inline-block rounded-lg border px-2.5 py-0.5 text-base font-bold ${gradeBadge(
+                  className={`font-mono tabular-nums inline-block rounded-lg border px-2 py-0.5 text-sm font-bold ${gradeBadge(
                     result.grade,
                   )}`}
                 >
@@ -194,33 +255,52 @@ export function BacktestPanel({ coin, onApplyToSetup }: BacktestPanelProps) {
               </div>
             </div>
 
-            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-2.5">
               <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">Win Rate</span>
-              <p className="font-mono tabular-nums mt-1 text-base font-bold text-[#EAECEF]">
+              <p className="font-mono tabular-nums mt-1 text-sm font-bold text-[#EAECEF]">
                 {result.winRate.toFixed(1)}%
               </p>
               <p className="font-mono tabular-nums text-[10px] text-[#5E6673]">
-                {result.wins}W / {result.losses}L ({result.totalTrades})
+                {result.wins}W / {result.losses}L
               </p>
             </div>
 
-            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-2.5">
               <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">
                 Profit Factor
               </span>
               <p
-                className={`font-mono tabular-nums mt-1 text-base font-bold ${
-                  result.profitFactor >= 1.3 ? 'text-[#00C087]' : 'text-[#F0B90B]'
+                className={`font-mono tabular-nums mt-1 text-sm font-bold ${
+                  result.profitFactor >= 1.3
+                    ? 'text-[#00C087]'
+                    : result.profitFactor >= 1
+                      ? 'text-[#F0B90B]'
+                      : 'text-[#F6465D]'
                 }`}
               >
                 {result.profitFactor.toFixed(2)}
               </p>
             </div>
 
-            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-2.5">
+              <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">
+                Expectancy
+              </span>
+              <p
+                className={`font-mono tabular-nums mt-1 text-sm font-bold ${
+                  result.expectancyR >= 0 ? 'text-[#00C087]' : 'text-[#F6465D]'
+                }`}
+              >
+                {result.expectancyR >= 0 ? '+' : ''}
+                {result.expectancyR.toFixed(2)}R
+              </p>
+              <p className="text-[10px] text-[#5E6673]">per trade</p>
+            </div>
+
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-2.5">
               <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">Net PnL</span>
               <p
-                className={`font-mono tabular-nums mt-1 text-base font-bold ${
+                className={`font-mono tabular-nums mt-1 text-sm font-bold ${
                   result.netPnlPercent >= 0 ? 'text-[#00C087]' : 'text-[#F6465D]'
                 }`}
               >
@@ -228,23 +308,40 @@ export function BacktestPanel({ coin, onApplyToSetup }: BacktestPanelProps) {
               </p>
             </div>
 
-            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
-              <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">Max DD</span>
-              <p className="font-mono tabular-nums mt-1 text-base font-bold text-[#F6465D]">
-                -{result.maxDrawdownPercent.toFixed(2)}%
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-2.5">
+              <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">
+                Max DD / Streak
+              </span>
+              <p className="font-mono tabular-nums mt-1 text-sm font-bold text-[#F6465D]">
+                -{result.maxDrawdownPercent.toFixed(1)}%
+              </p>
+              <p className="font-mono tabular-nums text-[10px] text-[#5E6673]">
+                Max {result.maxConsecutiveLosses}x loss
               </p>
             </div>
 
-            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-3">
-              <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">Saran Sinyal</span>
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-2.5">
+              <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">
+                L / S Edge
+              </span>
+              <p className="font-mono tabular-nums mt-1 text-xs font-bold text-[#00C087]">
+                L {result.longWinRate.toFixed(0)}%
+              </p>
+              <p className="font-mono tabular-nums text-xs font-bold text-[#F6465D]">
+                S {result.shortWinRate.toFixed(0)}%
+              </p>
+            </div>
+
+            <div className="rounded-xl border border-[#2B3139] bg-[#0B0E11] p-2.5">
+              <span className="text-[10px] uppercase tracking-wider text-[#848E9C]">Saran</span>
               <p
-                className={`mt-1 text-sm font-bold ${
+                className={`mt-1 text-xs font-bold ${
                   result.suggestedDirection === 'LONG' ? 'text-[#00C087]' : 'text-[#F6465D]'
                 }`}
               >
                 {result.suggestedDirection}
               </p>
-              <p className="font-mono tabular-nums text-[10px] text-[#848E9C]">
+              <p className="font-mono tabular-nums truncate text-[10px] text-[#848E9C]">
                 SL {formatPrice(result.suggestedStopLoss)}
               </p>
             </div>
@@ -252,7 +349,7 @@ export function BacktestPanel({ coin, onApplyToSetup }: BacktestPanelProps) {
 
           <div>
             <div className="mb-1.5 flex items-center justify-between text-[11px] text-[#848E9C]">
-              <span>Equity Curve (Normalized Base 100 · Risk 1%/Trade · Fee 0.1%)</span>
+              <span>Equity Curve (Base 100 · Risk 1%/Trade · Fee 0.1%)</span>
               <span className="font-mono tabular-nums">
                 Akhir: {(100 + result.netPnlPercent).toFixed(2)}
               </span>

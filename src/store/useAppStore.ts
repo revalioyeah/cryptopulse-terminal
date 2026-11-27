@@ -6,6 +6,7 @@ import type {
   NavTabId,
   ScreenerPreset,
   SectorName,
+  SetupDraftPayload,
   SpotFunnelReport,
   ToastItem,
   ToastVariant,
@@ -18,6 +19,7 @@ interface AppState {
   activeTab: NavTabId;
   selectedSymbol: string;
   setupMode: 'FUTURES' | 'SPOT';
+  pendingSetupDraft: SetupDraftPayload | null;
   screenerSectorFilter: SectorName | 'ALL';
   screenerPreset: ScreenerPreset;
   wsStatus: WsConnectionStatus;
@@ -39,6 +41,7 @@ interface AppState {
   setActiveTab: (tab: NavTabId) => void;
   setSelectedSymbol: (symbol: string) => void;
   setSetupMode: (mode: 'FUTURES' | 'SPOT') => void;
+  clearPendingSetupDraft: () => void;
   setScreenerSectorFilter: (sector: SectorName | 'ALL') => void;
   setScreenerPreset: (preset: ScreenerPreset) => void;
   setWsStatus: (status: WsConnectionStatus) => void;
@@ -56,7 +59,11 @@ interface AppState {
 
   openAnalysis: (symbol: string) => void;
   openScreenerForSector: (sector: SectorName | 'ALL') => void;
-  openSetupForCoin: (symbol: string, mode?: 'FUTURES' | 'SPOT') => void;
+  openSetupForCoin: (
+    symbol: string,
+    mode?: 'FUTURES' | 'SPOT',
+    draft?: Omit<SetupDraftPayload, 'symbol' | 'mode'>,
+  ) => void;
   openPriceAlertsModal: (symbol?: string) => void;
   closePriceAlertsModal: () => void;
   openSettingsModal: () => void;
@@ -73,6 +80,7 @@ export const useAppStore = create<AppState>((set) => ({
   activeTab: 'dashboard',
   selectedSymbol: 'BTCUSDT',
   setupMode: 'FUTURES',
+  pendingSetupDraft: null,
   screenerSectorFilter: 'ALL',
   screenerPreset: 'ALL',
   wsStatus: 'connecting',
@@ -93,6 +101,7 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveTab: (tab) => set({ activeTab: tab }),
   setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
   setSetupMode: (mode) => set({ setupMode: mode }),
+  clearPendingSetupDraft: () => set({ pendingSetupDraft: null }),
   setScreenerSectorFilter: (sector) => set({ screenerSectorFilter: sector }),
   setScreenerPreset: (preset) => set({ screenerPreset: preset }),
   setWsStatus: (status) => set({ wsStatus: status }),
@@ -160,12 +169,16 @@ export const useAppStore = create<AppState>((set) => ({
       activeTab: 'screener',
     }),
 
-  openSetupForCoin: (symbol, mode) =>
-    set((state) => ({
-      selectedSymbol: symbol,
-      setupMode: mode ?? state.setupMode,
-      activeTab: 'setup',
-    })),
+  openSetupForCoin: (symbol, mode, draft) =>
+    set((state) => {
+      const targetMode = mode ?? state.setupMode;
+      return {
+        selectedSymbol: symbol,
+        setupMode: targetMode,
+        pendingSetupDraft: draft ? { symbol, mode: targetMode, ...draft } : null,
+        activeTab: 'setup',
+      };
+    }),
 
   openPriceAlertsModal: (symbol) =>
     set({

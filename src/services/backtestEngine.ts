@@ -189,6 +189,35 @@ export function runBacktest(candles: Candle[], params: BacktestParams): Backtest
   const losses = totalTrades - wins;
   const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
 
+  const longTrades = trades.filter((t) => t.direction === 'LONG');
+  const shortTrades = trades.filter((t) => t.direction === 'SHORT');
+  const longWinRate =
+    longTrades.length > 0
+      ? (longTrades.filter((t) => t.outcome === 'WIN').length / longTrades.length) * 100
+      : 0;
+  const shortWinRate =
+    shortTrades.length > 0
+      ? (shortTrades.filter((t) => t.outcome === 'WIN').length / shortTrades.length) * 100
+      : 0;
+
+  const expectancyR =
+    totalTrades > 0
+      ? trades.reduce((acc, t) => acc + t.rMultiple, 0) / totalTrades
+      : 0;
+
+  let maxConsecutiveLosses = 0;
+  let currentLossStreak = 0;
+  for (const t of trades) {
+    if (t.outcome === 'LOSS') {
+      currentLossStreak += 1;
+      if (currentLossStreak > maxConsecutiveLosses) {
+        maxConsecutiveLosses = currentLossStreak;
+      }
+    } else {
+      currentLossStreak = 0;
+    }
+  }
+
   const grossProfit = trades
     .filter((t) => t.netPnlPercent > 0)
     .reduce((acc, t) => acc + t.netPnlPercent, 0);
@@ -243,6 +272,10 @@ export function runBacktest(candles: Candle[], params: BacktestParams): Backtest
     profitFactor: Number(profitFactor.toFixed(2)),
     netPnlPercent: Number(netPnlPercent.toFixed(2)),
     maxDrawdownPercent: Number(maxDrawdownPercent.toFixed(2)),
+    expectancyR: Number(expectancyR.toFixed(2)),
+    maxConsecutiveLosses,
+    longWinRate: Number(longWinRate.toFixed(1)),
+    shortWinRate: Number(shortWinRate.toFixed(1)),
     grade,
     equityCurve,
     trades,

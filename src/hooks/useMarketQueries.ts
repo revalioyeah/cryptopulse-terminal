@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import type { Timeframe } from '../types';
+import type { Coin, Timeframe } from '../types';
 import { fetchBinanceKlines, fetchBinanceTickers24h } from '../services/adapters/binanceAdapter';
-import { fetchGlobalMarketData } from '../services/adapters/coinGeckoAdapter';
+import { fetchGlobalMarketData, fetchTop100Tokenomics } from '../services/adapters/coinGeckoAdapter';
 import { fetchFearGreedIndex } from '../services/adapters/fearGreedAdapter';
 
 export function useBinanceTickersQuery() {
@@ -49,5 +49,16 @@ export function useBinanceKlinesQuery(
     gcTime: 10 * 60_000,
     retry: 1,
     enabled: Boolean(symbol),
+  });
+}
+
+export function useTop100TokenomicsQuery(coins: Coin[]) {
+  return useQuery({
+    queryKey: ['coingecko', 'top100Tokenomics'],
+    queryFn: () => fetchTop100Tokenomics(coins, false),
+    staleTime: 10 * 60_000,
+    gcTime: 20 * 60_000,
+    retry: 1,
+    enabled: coins.length > 0,
   });
 }

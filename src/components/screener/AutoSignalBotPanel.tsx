@@ -792,7 +792,17 @@ export function AutoSignalBotPanel() {
                   <button
                     type="button"
                     onClick={() =>
-                      openSetupForCoin(log.symbol, log.mode === 'SPOT_DCA' ? 'SPOT' : 'FUTURES')
+                      openSetupForCoin(log.symbol, log.mode === 'SPOT_DCA' ? 'SPOT' : 'FUTURES', {
+                        direction:
+                          log.direction === 'LONG' || log.direction === 'SHORT'
+                            ? log.direction
+                            : undefined,
+                        timeframe: log.timeframe,
+                        entryPrice: log.entryPrice,
+                        stopLoss: log.stopLoss,
+                        tp2: log.takeProfit,
+                        notes: `Scanner Pro: ${log.summary}`,
+                      })
                     }
                     className="inline-flex min-h-[40px] items-center gap-1 rounded-lg bg-[#F0B90B]/15 px-2.5 text-[11px] font-semibold text-[#F0B90B] transition hover:bg-[#F0B90B] hover:text-[#0B0E11]"
                   >

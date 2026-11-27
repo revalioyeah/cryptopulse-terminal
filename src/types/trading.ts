@@ -136,6 +136,10 @@ export interface BacktestResult {
   profitFactor: number;
   netPnlPercent: number;
   maxDrawdownPercent: number;
+  expectancyR: number;
+  maxConsecutiveLosses: number;
+  longWinRate: number;
+  shortWinRate: number;
   grade: BacktestGrade;
   equityCurve: EquityPoint[];
   trades: BacktestTrade[];
@@ -146,6 +150,19 @@ export interface BacktestResult {
   suggestedTp2: number;
   suggestedTp3: number;
   atrValue: number;
+}
+
+export interface SetupDraftPayload {
+  symbol: string;
+  mode: 'FUTURES' | 'SPOT';
+  direction?: TradeDirection;
+  timeframe?: Timeframe;
+  entryPrice?: number;
+  stopLoss?: number;
+  tp1?: number;
+  tp2?: number;
+  tp3?: number;
+  notes?: string;
 }
 
 export type AutoSignalMode = 'FUTURES' | 'SPOT_DCA';
