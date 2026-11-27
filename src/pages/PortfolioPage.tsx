@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowDownCircle,
   ArrowUpCircle,
   History,
   PieChart,
   Plus,
+  RotateCcw,
   TrendingUp,
   Wallet,
 } from 'lucide-react';
@@ -19,8 +21,10 @@ import {
   formatRawPrice,
   formatUsd,
 } from '../utils/format';
+import { AllocationDonutChart } from '../components/portfolio/AllocationDonutChart';
 import { PortfolioPerfChart } from '../components/portfolio/PortfolioPerfChart';
 import { PartialSellModal } from '../components/portfolio/PartialSellModal';
+import { Modal } from '../components/ui/Modal';
 
 const ALLOC_COLORS = ['#F0B90B', '#00C087', '#38BDF8', '#FB923C', '#EC4899', '#94A3B8'];
 
@@ -44,6 +48,7 @@ export function PortfolioPage() {
   const buyOrDcaSpot = usePortfolioStore((s) => s.buyOrDcaSpot);
   const partialSellSpot = usePortfolioStore((s) => s.partialSellSpot);
   const recordSnapshot = usePortfolioStore((s) => s.recordSnapshot);
+  const resetPortfolio = usePortfolioStore((s) => s.resetPortfolio);
 
   // USDT Cash Form State
   const [cashAmount, setCashAmount] = useState<string>('500');
@@ -59,13 +64,25 @@ export function PortfolioPage() {
   const [targetSellInput, setTargetSellInput] = useState<string>(() =>
     formatRawPrice((coinsMap.BTCUSDT?.price ?? 60000) * 1.4),
   );
+  const [buyPriceEdited, setBuyPriceEdited] = useState(false);
   const [buyNote, setBuyNote] = useState('');
 
-  // Sell Modal & History Filter
+  // Sell Modal, Reset Modal & History Filter
   const [sellTarget, setSellTarget] = useState<SpotHolding | null>(null);
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetStartUsdt, setResetStartUsdt] = useState<string>('0');
+  const [resetClearFutures, setResetClearFutures] = useState<boolean>(true);
   const [historyFilter, setHistoryFilter] = useState<'ALL' | 'SPOT' | 'FUTURES'>('ALL');
 
   const selectedBuyCoin = coinsMap[buySymbol] ?? coins[0];
+
+  useEffect(() => {
+    if (!buyPriceEdited && selectedBuyCoin && selectedBuyCoin.price > 0) {
+      setBuyPriceInput(formatRawPrice(selectedBuyCoin.price));
+      const existing = holdings.find((h) => h.symbol === buySymbol);
+      setTargetSellInput(formatRawPrice(existing?.targetSellPrice ?? selectedBuyCoin.price * 1.4));
+    }
+  }, [selectedBuyCoin?.price, buySymbol, buyPriceEdited]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live portfolio valuation metrics
   const metrics = useMemo(() => {
@@ -113,7 +130,7 @@ export function PortfolioPage() {
         label: 'Kas USDT',
         valueUsd: usdtBalance,
         percent: usdtSharePct,
-        color: '#474D57',
+        color: '#64748B',
       },
     ].sort((a, b) => b.valueUsd - a.valueUsd);
 
@@ -158,6 +175,7 @@ export function PortfolioPage() {
 
   const handleSelectBuyCoin = (symbol: string) => {
     setBuySymbol(symbol);
+    setBuyPriceEdited(false);
     const c = coinsMap[symbol];
     if (c) {
       setBuyPriceInput(formatRawPrice(c.price));
@@ -241,15 +259,44 @@ export function PortfolioPage() {
     });
   }, [activityLogs, historyFilter]);
 
+  const handleConfirmReset = () => {
+    const startVal = Math.max(0, Number.parseFloat(resetStartUsdt) || 0);
+    resetPortfolio({
+      initialUsdtBalance: startVal,
+      clearFuturesHistory: resetClearFutures,
+    });
+    setResetModalOpen(false);
+    pushToast(
+      'Portofolio Berhasil Direset',
+      `Mulai bersih dengan saldo Kas USDT ${formatUsd(startVal)}. Grafik & Realized TP diatur ulang.`,
+      'success',
+    );
+  };
+
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold tracking-tight text-[#EAECEF] sm:text-2xl">
-          Portofolio Akumulasi Spot &amp; Rekap Historis
-        </h1>
-        <p className="mt-0.5 text-xs text-[#848E9C]">
-          Kelola aset spot, kas USDT exchange, kalkulasi DCA live, TP parsial, dan riwayat terpadu Spot + Futures.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-[#EAECEF] sm:text-2xl">
+            Portofolio Akumulasi Spot &amp; Rekap Historis
+          </h1>
+          <p className="mt-0.5 text-xs text-[#848E9C]">
+            Kelola aset spot, kas USDT exchange, kalkulasi DCA live, TP parsial, dan riwayat terpadu Spot + Futures.
+          </p>
+        </div>
+
+        <button
+          id="btn-reset-portfolio"
+          type="button"
+          onClick={() => {
+            setResetStartUsdt('0');
+            setResetModalOpen(true);
+          }}
+          className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-[#F6465D]/40 bg-[#F6465D]/10 px-3.5 text-xs font-semibold text-[#F6465D] transition hover:bg-[#F6465D] hover:text-white"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          <span>Reset Portofolio</span>
+        </button>
       </div>
 
       {/* KPI Strip */}
@@ -328,7 +375,7 @@ export function PortfolioPage() {
         </div>
       </section>
 
-      {/* Performance Chart + Allocation Bar */}
+      {/* Performance Chart + Allocation Donut & Bar */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
         <div className="cp-card p-4 xl:col-span-7">
           <div className="mb-3 flex items-center justify-between">
@@ -347,46 +394,20 @@ export function PortfolioPage() {
 
         <div className="cp-card flex flex-col justify-between p-4 xl:col-span-5">
           <div>
-            <div className="mb-3 flex items-center gap-2">
-              <PieChart className="h-4 w-4 text-[#F0B90B]" />
-              <h2 className="text-sm font-semibold text-[#EAECEF]">
-                Persentase Aset dari Total Porto
-              </h2>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <PieChart className="h-4 w-4 text-[#F0B90B]" />
+                <h2 className="text-sm font-semibold text-[#EAECEF]">
+                  Persentase Aset dari Total Porto
+                </h2>
+              </div>
+              <span className="text-[11px] text-[#848E9C]">Grafik Donat &amp; Bobot</span>
             </div>
 
-            {/* Stacked Allocation Bar */}
-            <div className="flex h-3.5 w-full overflow-hidden rounded-full bg-[#0B0E11]">
-              {metrics.allocationItems.map((seg) => (
-                <div
-                  key={seg.label}
-                  style={{ width: `${Math.max(1, seg.percent)}%`, backgroundColor: seg.color }}
-                  title={`${seg.label}: ${seg.percent.toFixed(1)}%`}
-                />
-              ))}
-            </div>
-
-            <div className="mt-4 space-y-2">
-              {metrics.allocationItems.map((seg) => (
-                <div
-                  key={seg.label}
-                  className="flex items-center justify-between rounded-lg bg-[#0B0E11] px-3 py-2 text-xs"
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="h-2.5 w-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: seg.color }}
-                    />
-                    <span className="font-semibold text-[#EAECEF]">{seg.label}</span>
-                  </div>
-                  <div className="font-mono tabular-nums flex items-center gap-3">
-                    <span className="text-[#848E9C]">{formatUsd(seg.valueUsd)}</span>
-                    <span className="w-12 text-right font-bold text-[#EAECEF]">
-                      {seg.percent.toFixed(1)}%
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <AllocationDonutChart
+              items={metrics.allocationItems}
+              totalUsd={metrics.totalPortfolioUsdt}
+            />
           </div>
         </div>
       </div>
@@ -529,7 +550,10 @@ export function PortfolioPage() {
                 type="number"
                 step="any"
                 value={buyPriceInput}
-                onChange={(e) => setBuyPriceInput(e.target.value)}
+                onChange={(e) => {
+                  setBuyPriceEdited(true);
+                  setBuyPriceInput(e.target.value);
+                }}
                 className="font-mono tabular-nums min-h-[42px] w-full rounded-xl border border-[#2B3139] bg-[#0B0E11] px-3 text-xs font-semibold text-[#EAECEF]"
               />
             </div>
@@ -756,6 +780,77 @@ export function PortfolioPage() {
         onClose={() => setSellTarget(null)}
         onConfirmSell={handleConfirmSell}
       />
+
+      <Modal
+        open={resetModalOpen}
+        onClose={() => setResetModalOpen(false)}
+        title="Reset Portofolio Spot"
+        subtitle="Hapus aset demo/lama, nolkan Realized TP, dan mulai grafik historis dari awal"
+        maxWidthClass="max-w-md"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-2.5 rounded-xl border border-[#F6465D]/40 bg-[#F6465D]/10 p-3 text-xs text-[#EAECEF]">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#F6465D]" />
+            <p className="leading-relaxed">
+              Seluruh daftar aset Spot, riwayat transaksi Spot/Kas USDT, <strong>Realized TP</strong>, dan kurva historis lama akan dihapus bersih.
+            </p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-xs text-[#848E9C]">
+              Saldo Awal Kas USDT Setelah Reset (Opsional)
+            </label>
+            <input
+              type="number"
+              min={0}
+              step={100}
+              value={resetStartUsdt}
+              onChange={(e) => setResetStartUsdt(e.target.value)}
+              className="font-mono tabular-nums min-h-[42px] w-full rounded-xl border border-[#2B3139] bg-[#0B0E11] px-3 text-sm font-bold text-[#F0B90B]"
+            />
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {[0, 500, 1000, 5000].map((amt) => (
+                <button
+                  key={amt}
+                  type="button"
+                  onClick={() => setResetStartUsdt(String(amt))}
+                  className="font-mono tabular-nums min-h-[36px] rounded-lg border border-[#2B3139] bg-[#0B0E11] px-2.5 text-xs font-medium text-[#848E9C] hover:border-[#F0B90B]/60 hover:text-[#EAECEF]"
+                >
+                  ${amt.toLocaleString('en-US')}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className="flex min-h-[36px] cursor-pointer items-center gap-2 rounded-xl border border-[#2B3139] bg-[#0B0E11] px-3 py-2 text-xs text-[#EAECEF]">
+            <input
+              type="checkbox"
+              checked={resetClearFutures}
+              onChange={(e) => setResetClearFutures(e.target.checked)}
+              className="h-4 w-4 accent-[#F6465D]"
+            />
+            <span>Hapus juga riwayat Hit TP / Hit SL Futures di Rekap Historis</span>
+          </label>
+
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setResetModalOpen(false)}
+              className="min-h-[42px] rounded-xl border border-[#2B3139] bg-[#1E2329] px-4 text-xs font-medium text-[#EAECEF]"
+            >
+              Batal
+            </button>
+            <button
+              id="btn-confirm-reset-portfolio"
+              type="button"
+              onClick={handleConfirmReset}
+              className="min-h-[42px] rounded-xl bg-[#F6465D] px-4 text-xs font-bold text-white hover:bg-[#F6465D]/90"
+            >
+              Reset Sekarang
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

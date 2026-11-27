@@ -40,6 +40,7 @@ interface PortfolioState extends PortfolioPersistedData {
   deleteHolding: (holdingId: string) => void;
   addActivityLog: (entry: Omit<ActivityLog, 'id'>) => void;
   recordSnapshot: (coinValueUsdt: number) => void;
+  resetPortfolio: (options?: { initialUsdtBalance?: number; clearFuturesHistory?: boolean }) => void;
   hydratePortfolio: (data: Partial<PortfolioPersistedData>) => void;
 }
 
@@ -417,6 +418,53 @@ export const usePortfolioStore = create<PortfolioState>()(
             ].slice(-120),
           };
         }),
+
+      resetPortfolio: (options) => {
+        const initialUsdt = Math.max(0, Number((options?.initialUsdtBalance ?? 0).toFixed(2)));
+        const clearFutures = options?.clearFuturesHistory ?? true;
+        const nowUnix = Math.floor(Date.now() / 1000);
+
+        set((state) => {
+          const keptLogs = clearFutures
+            ? []
+            : state.activityLogs.filter((l) => l.category === 'FUTURES');
+
+          const freshLogs: ActivityLog[] =
+            initialUsdt > 0
+              ? [
+                  {
+                    id: generateId('act'),
+                    category: 'USDT_CASH',
+                    action: 'USDT_SET_BALANCE',
+                    amountUsdt: initialUsdt,
+                    note: `Reset portofolio — Saldo awal Kas USDT $${initialUsdt.toLocaleString('en-US')}`,
+                    timestamp: Date.now(),
+                  },
+                  ...keptLogs,
+                ]
+              : keptLogs;
+
+          return {
+            usdtBalance: initialUsdt,
+            holdings: [],
+            activityLogs: freshLogs,
+            snapshots: [
+              {
+                time: nowUnix - 3600,
+                totalValueUsdt: initialUsdt,
+                coinValueUsdt: 0,
+                usdtBalance: initialUsdt,
+              },
+              {
+                time: nowUnix,
+                totalValueUsdt: initialUsdt,
+                coinValueUsdt: 0,
+                usdtBalance: initialUsdt,
+              },
+            ],
+          };
+        });
+      },
 
       hydratePortfolio: (data) =>
         set((state) => ({
