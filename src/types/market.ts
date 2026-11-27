@@ -20,6 +20,8 @@ export interface Coin {
   nearBreakout: boolean;
   fundingRate: number; // e.g., 0.0001 = 0.01%
   marketCapRank: number;
+  hasFutures: boolean; // True jika tersedia kontrak perpetual USDT-M di Binance Futures
+  futuresSymbol?: string; // e.g., 'BTCUSDT' atau '1000PEPEUSDT'
   lastUpdated: number;
 }
 

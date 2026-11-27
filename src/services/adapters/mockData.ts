@@ -198,6 +198,8 @@ export function buildFallbackCoins(): Coin[] {
       volume24h: meta.baseQuoteVol / meta.basePrice,
       quoteVolume24h: meta.baseQuoteVol,
       marketCapRank: meta.marketCapRank,
+      hasFutures: true,
+      futuresSymbol: meta.symbol,
       lastUpdated: now,
       ...hints,
     };

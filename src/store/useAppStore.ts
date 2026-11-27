@@ -186,7 +186,12 @@ export const useAppStore = create<AppState>((set) => ({
 
   openSetupForCoin: (symbol, mode, draft) =>
     set((state) => {
-      const targetMode = mode ?? state.setupMode;
+      const targetCoin = state.coinsMap[symbol];
+      const requestedMode = mode ?? state.setupMode;
+      const targetMode =
+        requestedMode === 'FUTURES' && targetCoin && !targetCoin.hasFutures
+          ? 'SPOT'
+          : requestedMode;
       return {
         selectedSymbol: symbol,
         setupMode: targetMode,

@@ -72,6 +72,184 @@ async function fetchWithTimeout(url: string, timeoutMs = 8000): Promise<Response
   }
 }
 
+interface BinanceFuturesExchangeInfoRaw {
+  symbols?: Array<{
+    symbol: string;
+    status: string;
+    quoteAsset: string;
+    contractType?: string;
+  }>;
+}
+
+interface CoinGeckoBinanceFuturesRaw {
+  tickers?: Array<{
+    symbol?: string;
+    contract_type?: string;
+  }>;
+}
+
+interface OkxInstrumentsRaw {
+  code?: string;
+  data?: Array<{
+    instId?: string;
+    settleCcy?: string;
+    state?: string;
+  }>;
+}
+
+const FUTURES_LIST_CACHE_KEY = 'cryptopulse-binance-futures-list-v1';
+const FUTURES_LIST_TTL_MS = 6 * 60 * 60_000; // 6 hours
+
+let cachedFuturesMap: { fetchedAt: number; map: Map<string, string> } | null = null;
+
+function readPersistedFuturesMap(): Map<string, string> | null {
+  try {
+    const raw = window.localStorage.getItem(FUTURES_LIST_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { fetchedAt?: number; entries?: Array<[string, string]> };
+    if (
+      !parsed.fetchedAt ||
+      Date.now() - parsed.fetchedAt > FUTURES_LIST_TTL_MS ||
+      !Array.isArray(parsed.entries) ||
+      parsed.entries.length < 50
+    ) {
+      return null;
+    }
+    const map = new Map<string, string>(parsed.entries);
+    cachedFuturesMap = { fetchedAt: parsed.fetchedAt, map };
+    return map;
+  } catch {
+    return null;
+  }
+}
+
+function persistFuturesMap(map: Map<string, string>, fetchedAt: number): void {
+  try {
+    window.localStorage.setItem(
+      FUTURES_LIST_CACHE_KEY,
+      JSON.stringify({ fetchedAt, entries: Array.from(map.entries()) }),
+    );
+  } catch {
+    // Ignore quota errors
+  }
+}
+
+function registerFuturesContract(map: Map<string, string>, rawSymbol: string): void {
+  const sym = rawSymbol.toUpperCase();
+  if (!sym.endsWith('USDT')) return;
+  map.set(sym, sym);
+  // Map 1000-scaled Binance Futures contracts (e.g., 1000PEPEUSDT -> PEPEUSDT Spot)
+  if (sym.startsWith('1000') && sym.length > 8) {
+    const spotAlias = sym.slice(4);
+    if (!map.has(spotAlias)) {
+      map.set(spotAlias, sym);
+    }
+  }
+}
+
+/**
+ * Mengambil daftar kontrak USDT-M Perpetual aktif di Binance Futures secara real-time:
+ * 1) Cache lokal 6 jam (instan, tanpa boros kuota API)
+ * 2) CoinGecko Derivatives Binance Futures (`binance_futures`, 760+ kontrak perpetual resmi Binance, bebas geo-block)
+ * 3) Binance Futures API resmi (`fapi.binance.com/fapi/v1/exchangeInfo`)
+ * 4) OKX Live USDT Perpetuals (fallback bila kedua sumber di atas rate-limited)
+ */
+export async function fetchBinanceFuturesContractsMap(): Promise<Map<string, string>> {
+  const now = Date.now();
+  if (cachedFuturesMap && now - cachedFuturesMap.fetchedAt < FUTURES_LIST_TTL_MS) {
+    return cachedFuturesMap.map;
+  }
+
+  const persisted = readPersistedFuturesMap();
+  if (persisted) return persisted;
+
+  // 1) CoinGecko official Binance Futures derivatives exchange list (CORS *, worldwide)
+  try {
+    const res = await fetchWithTimeout(
+      'https://api.coingecko.com/api/v3/derivatives/exchanges/binance_futures?include_tickers=unexpired',
+      6500,
+    );
+    if (res.ok) {
+      const cg = (await res.json()) as CoinGeckoBinanceFuturesRaw;
+      if (Array.isArray(cg.tickers) && cg.tickers.length > 50) {
+        const map = new Map<string, string>();
+        for (const t of cg.tickers) {
+          if (t.contract_type === 'perpetual' && t.symbol && t.symbol.endsWith('USDT')) {
+            registerFuturesContract(map, t.symbol);
+          }
+        }
+        if (map.size > 50) {
+          cachedFuturesMap = { fetchedAt: now, map };
+          persistFuturesMap(map, now);
+          return map;
+        }
+      }
+    }
+  } catch {
+    // Fallback to direct Binance Futures API
+  }
+
+  // 2) Official Binance USDT-M Futures exchangeInfo (works directly in Asia/ID/EU)
+  try {
+    const res = await fetchWithTimeout('https://fapi.binance.com/fapi/v1/exchangeInfo', 3500);
+    if (res.ok) {
+      const info = (await res.json()) as BinanceFuturesExchangeInfoRaw;
+      if (Array.isArray(info.symbols) && info.symbols.length > 50) {
+        const map = new Map<string, string>();
+        for (const s of info.symbols) {
+          if (
+            s.quoteAsset === 'USDT' &&
+            s.status === 'TRADING' &&
+            s.contractType === 'PERPETUAL'
+          ) {
+            registerFuturesContract(map, s.symbol);
+          }
+        }
+        if (map.size > 50) {
+          cachedFuturesMap = { fetchedAt: now, map };
+          persistFuturesMap(map, now);
+          return map;
+        }
+      }
+    }
+  } catch {
+    // Region-blocked (HTTP 451 in US) or network error -> try OKX
+  }
+
+  // 3) OKX live USDT SWAP contracts fallback
+  try {
+    const res = await fetchWithTimeout(
+      'https://www.okx.com/api/v5/public/instruments?instType=SWAP',
+      5500,
+    );
+    if (res.ok) {
+      const okx = (await res.json()) as OkxInstrumentsRaw;
+      if (okx.code === '0' && Array.isArray(okx.data) && okx.data.length > 50) {
+        const map = new Map<string, string>();
+        for (const item of okx.data) {
+          if (item.settleCcy === 'USDT' && item.state === 'live' && item.instId?.endsWith('-USDT-SWAP')) {
+            const base = item.instId.slice(0, -'-USDT-SWAP'.length);
+            registerFuturesContract(map, `${base}USDT`);
+          }
+        }
+        if (map.size > 50) {
+          cachedFuturesMap = { fetchedAt: now, map };
+          persistFuturesMap(map, now);
+          return map;
+        }
+      }
+    }
+  } catch {
+    // Fallback below
+  }
+
+  const fallbackMap = new Map<string, string>();
+  for (const sym of Object.keys(COIN_META_MAP)) {
+    fallbackMap.set(sym, sym);
+  }
+  return fallbackMap;
+}
+
 export interface TickerFetchResult {
   coins: Coin[];
   isFallback: boolean;
@@ -79,11 +257,12 @@ export interface TickerFetchResult {
 
 export async function fetchBinanceTickers24h(): Promise<TickerFetchResult> {
   try {
-    const [tickerRes, exchangeInfoRes] = await Promise.all([
+    const [tickerRes, exchangeInfoRes, futuresMap] = await Promise.all([
       fetchWithTimeout(`${BINANCE_REST_BASE}/api/v3/ticker/24hr`, 8500),
       fetchWithTimeout(`${BINANCE_REST_BASE}/api/v3/exchangeInfo?permissions=SPOT`, 8500).catch(
         () => null,
       ),
+      fetchBinanceFuturesContractsMap(),
     ]);
 
     if (!tickerRes.ok) throw new Error(`Binance REST HTTP ${tickerRes.status}`);
@@ -148,6 +327,7 @@ export async function fetchBinanceTickers24h(): Promise<TickerFetchResult> {
         priceChangePercent24h,
         quoteVolume24h,
       );
+      const futuresSymbol = futuresMap.get(row.symbol);
 
       mapped.push({
         symbol: row.symbol,
@@ -162,6 +342,8 @@ export async function fetchBinanceTickers24h(): Promise<TickerFetchResult> {
         volume24h,
         quoteVolume24h,
         marketCapRank: meta?.marketCapRank ?? 999,
+        hasFutures: Boolean(futuresSymbol),
+        futuresSymbol,
         lastUpdated: now,
         ...hints,
       });

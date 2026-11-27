@@ -55,9 +55,20 @@ export function ScreenerPage() {
   const toggleWatchlist = useTradingStore((s) => s.toggleWatchlist);
 
   const [search, setSearch] = useState('');
+  const [marketFilter, setMarketFilter] = useState<'ALL' | 'FUTURES' | 'SPOT_ONLY'>('ALL');
   const [sortKey, setSortKey] = useState<SortKey>('quoteVolume24h');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
+
+  const marketCounts = useMemo(() => {
+    let futures = 0;
+    let spotOnly = 0;
+    for (const c of coins) {
+      if (c.hasFutures) futures += 1;
+      else spotOnly += 1;
+    }
+    return { all: coins.length, futures, spotOnly };
+  }, [coins]);
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -71,15 +82,22 @@ export function ScreenerPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [sectorFilter, preset, search]);
+  }, [sectorFilter, preset, search, marketFilter]);
 
   const filteredCoins = useMemo<Coin[]>(() => {
     const q = search.trim().toLowerCase();
     const watchSet = new Set(watchlist);
 
     const list = coins.filter((c) => {
+      if (marketFilter === 'FUTURES' && !c.hasFutures) return false;
+      if (marketFilter === 'SPOT_ONLY' && c.hasFutures) return false;
       if (sectorFilter !== 'ALL' && c.sector !== sectorFilter) return false;
-      if (q && !c.baseAsset.toLowerCase().includes(q) && !c.name.toLowerCase().includes(q) && !c.symbol.toLowerCase().includes(q)) {
+      if (
+        q &&
+        !c.baseAsset.toLowerCase().includes(q) &&
+        !c.name.toLowerCase().includes(q) &&
+        !c.symbol.toLowerCase().includes(q)
+      ) {
         return false;
       }
       switch (preset) {
@@ -104,7 +122,7 @@ export function ScreenerPage() {
       const mul = sortDir === 'desc' ? -1 : 1;
       return (a[sortKey] - b[sortKey]) * mul;
     });
-  }, [coins, sectorFilter, preset, search, watchlist, sortKey, sortDir]);
+  }, [coins, marketFilter, sectorFilter, preset, search, watchlist, sortKey, sortDir]);
 
   const totalPages = Math.max(1, Math.ceil(filteredCoins.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages);
@@ -178,6 +196,32 @@ export function ScreenerPage() {
               );
             })}
           </div>
+        </div>
+
+        {/* Market Filter (Futures Perp vs Spot Only) */}
+        <div className="flex flex-wrap items-center gap-1.5 border-t border-[#2B3139] pt-3">
+          <span className="mr-1 text-[11px] font-medium uppercase text-[#848E9C]">Pasar:</span>
+          {(
+            [
+              { id: 'ALL', label: `Semua (${marketCounts.all})` },
+              { id: 'FUTURES', label: `Futures Perp (${marketCounts.futures})` },
+              { id: 'SPOT_ONLY', label: `Spot Only (${marketCounts.spotOnly})` },
+            ] as const
+          ).map((m) => (
+            <button
+              key={m.id}
+              id={`btn-screener-market-${m.id.toLowerCase()}`}
+              type="button"
+              onClick={() => setMarketFilter(m.id)}
+              className={`min-h-[38px] rounded-lg border px-3 text-xs font-semibold transition ${
+                marketFilter === m.id
+                  ? 'border-[#F0B90B] bg-[#F0B90B] text-[#0B0E11]'
+                  : 'border-[#2B3139] bg-[#0B0E11] text-[#848E9C] hover:text-[#EAECEF]'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
         </div>
 
         {/* Quick Presets */}
@@ -311,8 +355,17 @@ export function ScreenerPage() {
                         </button>
                       </td>
                       <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-1.5">
                           <span className="font-semibold text-[#EAECEF]">{coin.baseAsset}</span>
+                          <span
+                            className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                              coin.hasFutures
+                                ? 'bg-[#F0B90B]/15 text-[#F0B90B]'
+                                : 'bg-[#1E2329] text-[#848E9C]'
+                            }`}
+                          >
+                            {coin.hasFutures ? 'FUT' : 'SPOT'}
+                          </span>
                           <span className="rounded bg-[#0B0E11] px-1.5 py-0.5 text-[10px] text-[#848E9C]">
                             {coin.sector}
                           </span>
@@ -374,11 +427,13 @@ export function ScreenerPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => openSetupForCoin(coin.symbol)}
+                            onClick={() =>
+                              openSetupForCoin(coin.symbol, coin.hasFutures ? 'FUTURES' : 'SPOT')
+                            }
                             className="inline-flex h-9 items-center gap-1 rounded-lg bg-[#F0B90B]/15 px-2.5 text-xs font-semibold text-[#F0B90B] transition hover:bg-[#F0B90B] hover:text-[#0B0E11]"
                           >
                             <ShieldCheck className="h-3.5 w-3.5" />
-                            Setup
+                            {coin.hasFutures ? 'Futures' : 'Spot'}
                           </button>
                         </div>
                       </td>
@@ -419,8 +474,17 @@ export function ScreenerPage() {
                       />
                     </button>
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
                         <span className="text-sm font-bold text-[#EAECEF]">{coin.baseAsset}</span>
+                        <span
+                          className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                            coin.hasFutures
+                              ? 'bg-[#F0B90B]/15 text-[#F0B90B]'
+                              : 'bg-[#1E2329] text-[#848E9C]'
+                          }`}
+                        >
+                          {coin.hasFutures ? 'FUT' : 'SPOT'}
+                        </span>
                         <span className="rounded bg-[#0B0E11] px-1.5 py-0.5 text-[10px] text-[#848E9C]">
                           {coin.sector}
                         </span>
@@ -451,7 +515,7 @@ export function ScreenerPage() {
                     </span>
                   </div>
                   <div>
-                    <span className="block text-[10px] text-[#5E6673]">RSI (14)</span>
+                    <span className="block text-[10px] text-[#5E6673]">RSI (Est.)</span>
                     <span
                       className={`font-mono tabular-nums text-xs font-semibold ${
                         coin.rsi14 < 30
@@ -465,7 +529,7 @@ export function ScreenerPage() {
                     </span>
                   </div>
                   <div>
-                    <span className="block text-[10px] text-[#5E6673]">OI 24h</span>
+                    <span className="block text-[10px] text-[#5E6673]">Flow/OI Est.</span>
                     <span
                       className={`font-mono tabular-nums text-xs font-semibold ${
                         coin.oiChange24h >= 0 ? 'text-[#00C087]' : 'text-[#F6465D]'
@@ -487,11 +551,13 @@ export function ScreenerPage() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => openSetupForCoin(coin.symbol)}
+                    onClick={() =>
+                      openSetupForCoin(coin.symbol, coin.hasFutures ? 'FUTURES' : 'SPOT')
+                    }
                     className="flex min-h-[40px] items-center justify-center gap-1.5 rounded-lg bg-[#F0B90B] text-xs font-semibold text-[#0B0E11]"
                   >
                     <ShieldCheck className="h-3.5 w-3.5" />
-                    Buat Setup
+                    {coin.hasFutures ? 'Setup Futures' : 'Setup Spot'}
                   </button>
                 </div>
               </div>

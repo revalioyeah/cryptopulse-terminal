@@ -9,6 +9,8 @@ interface CoinSearchSelectProps {
   onChange: (symbol: string) => void;
   id?: string;
   className?: string;
+  placeholder?: string;
+  showMarketBadge?: boolean;
 }
 
 export function CoinSearchSelect({
@@ -17,6 +19,8 @@ export function CoinSearchSelect({
   onChange,
   id,
   className = '',
+  placeholder,
+  showMarketBadge = true,
 }: CoinSearchSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -36,6 +40,7 @@ export function CoinSearchSelect({
         (c) =>
           c.baseAsset.toLowerCase().includes(q) ||
           c.symbol.toLowerCase().includes(q) ||
+          (c.futuresSymbol && c.futuresSymbol.toLowerCase().includes(q)) ||
           c.name.toLowerCase().includes(q),
       )
       .slice(0, 80);
@@ -82,7 +87,7 @@ export function CoinSearchSelect({
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 top-full z-40 mt-1.5 min-w-[240px] overflow-hidden rounded-xl border border-[#2B3139] bg-[#161A1E] shadow-2xl">
+        <div className="absolute left-0 right-0 top-full z-40 mt-1.5 min-w-[260px] overflow-hidden rounded-xl border border-[#2B3139] bg-[#161A1E] shadow-2xl">
           <div className="border-b border-[#2B3139] p-2">
             <div className="relative">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#848E9C]" />
@@ -91,7 +96,7 @@ export function CoinSearchSelect({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder={`Cari dari ${coins.length} coin Binance...`}
+                placeholder={placeholder ?? `Cari dari ${coins.length} coin Binance...`}
                 className="min-h-[38px] w-full rounded-lg border border-[#2B3139] bg-[#0B0E11] pl-8 pr-2.5 text-xs text-[#EAECEF] placeholder-[#5E6673] focus:border-[#F0B90B] focus:outline-none"
               />
             </div>
@@ -118,11 +123,22 @@ export function CoinSearchSelect({
                         : 'text-[#EAECEF] hover:bg-[#1E2329]'
                     }`}
                   >
-                    <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-1.5">
                       <span className="font-bold">{c.baseAsset}</span>
-                      <span className="ml-1 text-[10px] text-[#5E6673]">/USDT</span>
+                      <span className="text-[10px] text-[#5E6673]">/USDT</span>
+                      {showMarketBadge && (
+                        <span
+                          className={`rounded px-1 py-0.5 text-[9px] font-bold ${
+                            c.hasFutures
+                              ? 'bg-[#F0B90B]/15 text-[#F0B90B]'
+                              : 'bg-[#1E2329] text-[#848E9C]'
+                          }`}
+                        >
+                          {c.hasFutures ? 'FUT' : 'SPOT'}
+                        </span>
+                      )}
                       {c.name !== c.baseAsset && (
-                        <span className="ml-1.5 truncate text-[10px] text-[#848E9C]">{c.name}</span>
+                        <span className="truncate text-[10px] text-[#848E9C]">{c.name}</span>
                       )}
                     </div>
                     <div className="font-mono tabular-nums shrink-0 text-right">

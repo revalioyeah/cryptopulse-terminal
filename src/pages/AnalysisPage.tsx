@@ -89,7 +89,7 @@ export function AnalysisPage() {
           </div>
 
           <div>
-            <div className="flex items-baseline gap-2">
+            <div className="flex flex-wrap items-baseline gap-2">
               <h1 className="font-mono tabular-nums text-xl font-bold text-[#EAECEF] sm:text-2xl">
                 {formatPrice(coin.price)}
               </h1>
@@ -99,6 +99,19 @@ export function AnalysisPage() {
                 }`}
               >
                 {formatPercent(coin.priceChangePercent24h)}
+              </span>
+              <span
+                className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${
+                  coin.hasFutures
+                    ? 'bg-[#F0B90B]/15 text-[#F0B90B]'
+                    : 'bg-[#1E2329] text-[#848E9C]'
+                }`}
+              >
+                {coin.hasFutures
+                  ? coin.futuresSymbol && coin.futuresSymbol !== coin.symbol
+                    ? `FUTURES (${coin.futuresSymbol}) + SPOT`
+                    : 'FUTURES + SPOT'
+                  : 'SPOT ONLY'}
               </span>
             </div>
             <p className="font-mono tabular-nums mt-0.5 text-[11px] text-[#848E9C]">
@@ -138,11 +151,11 @@ export function AnalysisPage() {
 
           <button
             type="button"
-            onClick={() => openSetupForCoin(coin.symbol, 'FUTURES')}
+            onClick={() => openSetupForCoin(coin.symbol, coin.hasFutures ? 'FUTURES' : 'SPOT')}
             className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl bg-[#F0B90B] px-3.5 text-xs font-semibold text-[#0B0E11] hover:bg-[#F0B90B]/90"
           >
             <ShieldCheck className="h-4 w-4" />
-            <span>Buat Setup</span>
+            <span>{coin.hasFutures ? 'Setup Futures' : 'Setup Spot'}</span>
           </button>
         </div>
       </div>

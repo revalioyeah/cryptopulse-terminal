@@ -352,8 +352,9 @@ export async function runFuturesProScan(
     'SOXLB', 'SOXSB', 'SKHYB', 'KORUB', 'QQQB', 'SPYB', 'SLVB', 'GLDB', 'INTCB', 'AMDB', 'PLTRB',
   ]);
 
-  // Stage 1: Universe & Liquidity Filter
+  // Stage 1: Universe & Liquidity Filter (STRICTLY verified Futures Perpetual pairs only!)
   let universe = coins.filter((c) => {
+    if (!c.hasFutures) return false;
     if (NON_CRYPTO_ETFS.has(c.baseAsset)) return false;
     if (config.universeScope === 'WATCHLIST') {
       return watchSet.has(c.symbol);
