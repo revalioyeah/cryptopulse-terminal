@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cp-bg: #0B0E11;
+  --color-cp-surface: #161A1E;
+  --color-cp-surface-2: #1E2329;
+  --color-cp-border: #2B3139;
+  --color-cp-bull: #00C087;
+  --color-cp-bear: #F6465D;
+  --color-cp-accent: #F0B90B;
+  --color-cp-text: #EAECEF;
+  --color-cp-muted: #848E9C;
+  --color-cp-subtle: #5E6673;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: #0B0E11;
+    color: #EAECEF;
+    font-family: var(--font-sans);
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  * {
+    border-color: #2B3139;
+  }
+}
+
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.safe-area-pb {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-area-pt {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.cp-card {
+  background-color: #161A1E;
+  border: 1px solid #2B3139;
+  border-radius: 12px;
+}
+
+.cp-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.cp-scrollbar::-webkit-scrollbar-track {
+  background: #0B0E11;
+}
+
+.cp-scrollbar::-webkit-scrollbar-thumb {
+  background: #2B3139;
+  border-radius: 9999px;
+}
+
+.cp-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #474D57;
+}
