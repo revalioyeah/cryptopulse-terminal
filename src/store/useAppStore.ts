@@ -43,6 +43,10 @@ interface AppState {
   lastFuturesReport: FuturesScanReport | null;
   lastSpotFunnelReport: SpotFunnelReport | null;
 
+  // Live Cloud Sync status
+  cloudSyncBusy: boolean;
+  setCloudSyncBusy: (busy: boolean) => void;
+
   setActiveTab: (tab: NavTabId) => void;
   setSelectedSymbol: (symbol: string) => void;
   setSetupMode: (mode: 'FUTURES' | 'SPOT') => void;
@@ -104,6 +108,9 @@ export const useAppStore = create<AppState>((set) => ({
   lastScanAt: null,
   lastFuturesReport: null,
   lastSpotFunnelReport: null,
+
+  cloudSyncBusy: false,
+  setCloudSyncBusy: (busy) => set({ cloudSyncBusy: busy }),
 
   setActiveTab: (tab) => set({ activeTab: tab }),
   setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),

@@ -7,9 +7,11 @@ import {
 import {
   decodeCloudPairCode,
   decodeSyncCode,
-  fetchCloudGistUpdatedAt,
+  fetchRemoteGistSnapshot,
+  isApplyingRemoteSync,
   pullCloudSyncGist,
   pushCloudSyncGist,
+  withRemoteSyncLock,
 } from '../services/syncService';
 import { useAppStore } from '../store/useAppStore';
 import { usePortfolioStore } from '../store/usePortfolioStore';
@@ -30,20 +32,29 @@ export interface IncomingPairPrompt {
 
 export type IncomingMobileSyncPrompt = IncomingSyncPrompt | IncomingPairPrompt;
 
+const AUTO_PUSH_DEBOUNCE_MS = 1200; // Fast 1.2s push so mobile edits reach Cloud before app switches
+const AUTO_PULL_INTERVAL_MS = 20_000; // Check Cloud every 20s while visible so open Web tabs auto-update
+
 /**
  * Global hook sinkronisasi lintas perangkat (Web <-> Mobile):
- * 1) Mendeteksi link transfer instan `#cp-sync=...` dan link pairing `#cp-pair=...` saat buka app.
- * 2) Menjalankan Cloud Auto-Sync dua arah via Private GitHub Gist bila diaktifkan oleh pengguna.
+ * 1) Mendeteksi link transfer instan `#cp-sync=...` dan link pairing `#cp-pair=...`.
+ * 2) Auto-Pull real-time saat startup, tab visible, window focus, reconnect online, & polling 20 detik.
+ * 3) Auto-Push cepat (1.2 detik) + flush `keepalive` saat browser mobile ditutup/pindah app,
+ *    hanya untuk perubahan data asli (mengabaikan tick harga/snapshot agar tidak pernah menimpa perangkat lain).
  */
 export function useCloudSync() {
   const [incomingPrompt, setIncomingPrompt] = useState<IncomingMobileSyncPrompt | null>(null);
   const cloudSync = useSettingsStore((s) => s.cloudSyncConfig);
   const updateCloudSyncConfig = useSettingsStore((s) => s.updateCloudSyncConfig);
   const pushToast = useAppStore((s) => s.pushToast);
+  const setCloudSyncBusy = useAppStore((s) => s.setCloudSyncBusy);
 
-  const applyingRemoteRef = useRef(false);
   const pushTimerRef = useRef<number | null>(null);
+  const hasPendingPushRef = useRef(false);
   const syncingRef = useRef(false);
+
+  const hasCredentials = Boolean(cloudSync.githubToken.trim() && cloudSync.gistId.trim());
+  const autoSyncActive = hasCredentials && cloudSync.autoSync !== false;
 
   // 1) Check URL hash for incoming instant sync snapshot or cloud pairing link
   useEffect(() => {
@@ -94,19 +105,14 @@ export function useCloudSync() {
     setIncomingPrompt(null);
 
     if (current.kind === 'SNAPSHOT') {
-      applyingRemoteRef.current = true;
-      try {
+      withRemoteSyncLock(() => {
         restoreBackupPayload(current.payload);
-        pushToast(
-          'Sync Mobile/Web Diterapkan',
-          `${current.summary.holdingsCount} aset spot, ${current.summary.futuresSetupsCount + current.summary.spotSetupsCount} setup, dan ${current.summary.watchlistCount} watchlist disinkronkan.`,
-          'success',
-        );
-      } finally {
-        window.setTimeout(() => {
-          applyingRemoteRef.current = false;
-        }, 500);
-      }
+      });
+      pushToast(
+        'Sync Mobile/Web Diterapkan',
+        `${current.summary.holdingsCount} aset spot, ${current.summary.futuresSetupsCount + current.summary.spotSetupsCount} setup, dan ${current.summary.watchlistCount} watchlist disinkronkan.`,
+        'success',
+      );
       return;
     }
 
@@ -119,142 +125,221 @@ export function useCloudSync() {
       gistId: current.gistId,
       lastSyncError: undefined,
     };
-    updateCloudSyncConfig(nextCfg);
+    withRemoteSyncLock(() => {
+      updateCloudSyncConfig(nextCfg);
+    });
 
-    applyingRemoteRef.current = true;
+    setCloudSyncBusy(true);
     try {
       const pullRes = await pullCloudSyncGist(nextCfg);
       if (pullRes.ok) {
-        updateCloudSyncConfig({
-          lastSyncedAt: pullRes.syncedAt,
-          lastSyncDirection: 'PULL',
-          lastSyncError: undefined,
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig({
+            lastSyncedAt: pullRes.syncedAt,
+            lastSyncDirection: 'PULL',
+            lastSyncError: undefined,
+          });
         });
         pushToast('Cloud Sync Terhubung & Ditarik', pullRes.message, 'success');
       } else {
-        updateCloudSyncConfig({ lastSyncError: pullRes.error });
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig({ lastSyncError: pullRes.error });
+        });
         pushToast('Pairing Tersimpan, Pull Gagal', pullRes.error, 'warning');
       }
     } finally {
-      window.setTimeout(() => {
-        applyingRemoteRef.current = false;
-      }, 600);
+      setCloudSyncBusy(false);
     }
-  }, [incomingPrompt, pushToast, updateCloudSyncConfig]);
+  }, [incomingPrompt, pushToast, setCloudSyncBusy, updateCloudSyncConfig]);
 
   const cancelIncomingPrompt = useCallback(() => {
     setIncomingPrompt(null);
   }, []);
 
-  // 2) Auto-Pull from Cloud Gist on startup & tab refocus (e.g., switching from Desktop to Mobile)
+  // 2) Auto-Pull on mount, visibilitychange, window focus, online reconnect, and 20s visible polling
   useEffect(() => {
-    if (!cloudSync.enabled || !cloudSync.autoSync || !cloudSync.githubToken || !cloudSync.gistId) {
-      return;
-    }
+    if (!autoSyncActive) return;
 
     const checkAndPull = async () => {
-      if (syncingRef.current || applyingRemoteRef.current) return;
+      if (syncingRef.current || isApplyingRemoteSync() || hasPendingPushRef.current) return;
       const cfg = useSettingsStore.getState().cloudSyncConfig;
-      if (!cfg.enabled || !cfg.autoSync || !cfg.githubToken || !cfg.gistId) return;
+      if (!cfg.githubToken.trim() || !cfg.gistId.trim() || cfg.autoSync === false) return;
 
       syncingRef.current = true;
+      setCloudSyncBusy(true);
       try {
-        const remoteTs = await fetchCloudGistUpdatedAt(cfg);
-        if (!remoteTs) return;
-        const localTs = cfg.lastSyncedAt ?? 0;
-        // Pull if remote cloud snapshot is strictly newer (> 3s buffer)
-        if (remoteTs > localTs + 3000) {
-          applyingRemoteRef.current = true;
-          const res = await pullCloudSyncGist(cfg);
-          if (res.ok) {
+        const remoteRes = await fetchRemoteGistSnapshot(cfg);
+        if (!remoteRes.ok) return;
+
+        const { payload, summary, remoteUpdatedAt } = remoteRes.snapshot;
+        const localSyncedAt = cfg.lastSyncedAt ?? 0;
+
+        // Compare strictly against GitHub's own server timestamp (no clock skew, no 3s blind window!)
+        if (remoteUpdatedAt > localSyncedAt) {
+          withRemoteSyncLock(() => {
+            restoreBackupPayload(payload);
             updateCloudSyncConfig({
-              lastSyncedAt: res.syncedAt,
+              enabled: true,
+              lastSyncedAt: remoteUpdatedAt,
               lastSyncDirection: 'PULL',
               lastSyncError: undefined,
             });
-            pushToast('Cloud Sync Diperbarui', res.message, 'info');
-          }
-          window.setTimeout(() => {
-            applyingRemoteRef.current = false;
-          }, 600);
+          });
+          pushToast(
+            'Cloud Sync Diperbarui',
+            `${summary.holdingsCount} aset spot · ${summary.futuresSetupsCount + summary.spotSetupsCount} setup jurnal · ${summary.alertsCount} alerts.`,
+            'info',
+          );
         }
       } finally {
         syncingRef.current = false;
+        setCloudSyncBusy(false);
       }
     };
 
     void checkAndPull();
+
     const onVisibility = () => {
       if (document.visibilityState === 'visible') {
         void checkAndPull();
       }
     };
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [cloudSync.enabled, cloudSync.autoSync, cloudSync.githubToken, cloudSync.gistId, pushToast, updateCloudSyncConfig]);
+    const onFocus = () => {
+      void checkAndPull();
+    };
+    const onOnline = () => {
+      void checkAndPull();
+    };
 
-  // 3) Auto-Push debounced when local persisted state changes
-  useEffect(() => {
-    if (!cloudSync.enabled || !cloudSync.autoSync || !cloudSync.githubToken || !cloudSync.gistId) {
-      return;
-    }
-
-    const schedulePush = () => {
-      if (applyingRemoteRef.current) return;
-      if (pushTimerRef.current !== null) {
-        window.clearTimeout(pushTimerRef.current);
+    const pollTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void checkAndPull();
       }
-      pushTimerRef.current = window.setTimeout(async () => {
-        if (applyingRemoteRef.current || syncingRef.current) return;
-        const cfg = useSettingsStore.getState().cloudSyncConfig;
-        if (!cfg.enabled || !cfg.autoSync || !cfg.githubToken || !cfg.gistId) return;
+    }, AUTO_PULL_INTERVAL_MS);
 
-        syncingRef.current = true;
-        try {
-          const res = await pushCloudSyncGist(cfg);
-          if (res.ok) {
-            applyingRemoteRef.current = true;
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onOnline);
+
+    return () => {
+      window.clearInterval(pollTimer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [autoSyncActive, pushToast, setCloudSyncBusy, updateCloudSyncConfig]);
+
+  // 3) Fast Auto-Push (1.2s) ONLY on meaningful user edits + keepalive flush on mobile app switch/close
+  useEffect(() => {
+    if (!autoSyncActive) return;
+
+    const executePush = async (keepalive = false) => {
+      if (isApplyingRemoteSync()) return;
+      if (syncingRef.current && !keepalive) return;
+
+      const cfg = useSettingsStore.getState().cloudSyncConfig;
+      if (!cfg.githubToken.trim() || !cfg.gistId.trim() || cfg.autoSync === false) return;
+
+      hasPendingPushRef.current = false;
+      syncingRef.current = true;
+      setCloudSyncBusy(true);
+      try {
+        const res = await pushCloudSyncGist(cfg, { keepalive });
+        if (res.ok) {
+          withRemoteSyncLock(() => {
             updateCloudSyncConfig({
+              enabled: true,
               gistId: res.gistId,
               lastSyncedAt: res.syncedAt,
               lastSyncDirection: 'PUSH',
               lastSyncError: undefined,
             });
-            window.setTimeout(() => {
-              applyingRemoteRef.current = false;
-            }, 300);
-          } else {
-            applyingRemoteRef.current = true;
+          });
+        } else {
+          withRemoteSyncLock(() => {
             updateCloudSyncConfig({ lastSyncError: res.error });
-            window.setTimeout(() => {
-              applyingRemoteRef.current = false;
-            }, 300);
-          }
-        } finally {
-          syncingRef.current = false;
+          });
         }
-      }, 4000);
+      } finally {
+        syncingRef.current = false;
+        setCloudSyncBusy(false);
+      }
     };
 
-    const unsubTrading = useTradingStore.subscribe(schedulePush);
-    const unsubPortfolio = usePortfolioStore.subscribe(schedulePush);
+    const schedulePush = () => {
+      if (isApplyingRemoteSync()) return;
+      hasPendingPushRef.current = true;
+      if (pushTimerRef.current !== null) {
+        window.clearTimeout(pushTimerRef.current);
+      }
+      pushTimerRef.current = window.setTimeout(() => {
+        pushTimerRef.current = null;
+        void executePush(false);
+      }, AUTO_PUSH_DEBOUNCE_MS);
+    };
+
+    // Only push on genuine user data changes (ignore live price snapshots & ephemeral cooldown ticks!)
+    const unsubTrading = useTradingStore.subscribe((state, prev) => {
+      if (
+        state.watchlist !== prev.watchlist ||
+        state.futuresSetups !== prev.futuresSetups ||
+        state.spotSetups !== prev.spotSetups ||
+        state.maxDailySlHits !== prev.maxDailySlHits ||
+        state.scannerConfig !== prev.scannerConfig
+      ) {
+        schedulePush();
+      }
+    });
+
+    const unsubPortfolio = usePortfolioStore.subscribe((state, prev) => {
+      if (
+        state.usdtBalance !== prev.usdtBalance ||
+        state.holdings !== prev.holdings ||
+        state.activityLogs !== prev.activityLogs ||
+        state.autoDeductUsdtOnBuy !== prev.autoDeductUsdtOnBuy ||
+        state.autoCreditUsdtOnSell !== prev.autoCreditUsdtOnSell
+      ) {
+        schedulePush();
+      }
+    });
+
     const unsubSettings = useSettingsStore.subscribe((state, prev) => {
-      // Only push when priceAlerts or telegramConfig changed (ignore cloudSync metadata timestamp updates)
       if (state.priceAlerts !== prev.priceAlerts || state.telegramConfig !== prev.telegramConfig) {
         schedulePush();
       }
     });
 
+    // Flush immediately if user backgrounds/closes mobile browser right after saving a setup
+    const flushIfPending = () => {
+      if (!hasPendingPushRef.current) return;
+      if (pushTimerRef.current !== null) {
+        window.clearTimeout(pushTimerRef.current);
+        pushTimerRef.current = null;
+      }
+      void executePush(true);
+    };
+
+    const onVisibilityHide = () => {
+      if (document.visibilityState === 'hidden') {
+        flushIfPending();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityHide);
+    window.addEventListener('pagehide', flushIfPending);
+
     return () => {
       unsubTrading();
       unsubPortfolio();
       unsubSettings();
+      document.removeEventListener('visibilitychange', onVisibilityHide);
+      window.removeEventListener('pagehide', flushIfPending);
       if (pushTimerRef.current !== null) {
         window.clearTimeout(pushTimerRef.current);
         pushTimerRef.current = null;
       }
     };
-  }, [cloudSync.enabled, cloudSync.autoSync, cloudSync.githubToken, cloudSync.gistId, updateCloudSyncConfig]);
+  }, [autoSyncActive, setCloudSyncBusy, updateCloudSyncConfig]);
 
   return {
     incomingPrompt,

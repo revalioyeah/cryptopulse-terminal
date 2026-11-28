@@ -35,6 +35,7 @@ import {
   encodeCloudPairCode,
   pullCloudSyncGist,
   pushCloudSyncGist,
+  withRemoteSyncLock,
 } from '../../services/syncService';
 import { useAppStore, type SettingsModalTab } from '../../store/useAppStore';
 import { usePortfolioStore } from '../../store/usePortfolioStore';
@@ -213,16 +214,20 @@ export function SettingsBackupModal() {
     try {
       const res = await pushCloudSyncGist(cloudSyncConfig);
       if (res.ok) {
-        updateCloudSyncConfig({
-          enabled: true,
-          gistId: res.gistId,
-          lastSyncedAt: res.syncedAt,
-          lastSyncDirection: 'PUSH',
-          lastSyncError: undefined,
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig({
+            enabled: true,
+            gistId: res.gistId,
+            lastSyncedAt: res.syncedAt,
+            lastSyncDirection: 'PUSH',
+            lastSyncError: undefined,
+          });
         });
         pushToast('Cloud Push Berhasil', res.message, 'success');
       } else {
-        updateCloudSyncConfig({ lastSyncError: res.error });
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig({ lastSyncError: res.error });
+        });
         pushToast('Cloud Push Gagal', res.error, 'error');
       }
     } finally {
@@ -235,15 +240,19 @@ export function SettingsBackupModal() {
     try {
       const res = await pullCloudSyncGist(cloudSyncConfig);
       if (res.ok) {
-        updateCloudSyncConfig({
-          enabled: true,
-          lastSyncedAt: res.syncedAt,
-          lastSyncDirection: 'PULL',
-          lastSyncError: undefined,
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig({
+            enabled: true,
+            lastSyncedAt: res.syncedAt,
+            lastSyncDirection: 'PULL',
+            lastSyncError: undefined,
+          });
         });
         pushToast('Cloud Pull Berhasil', res.message, 'success');
       } else {
-        updateCloudSyncConfig({ lastSyncError: res.error });
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig({ lastSyncError: res.error });
+        });
         pushToast('Cloud Pull Gagal', res.error, 'error');
       }
     } finally {
@@ -801,17 +810,23 @@ export function SettingsBackupModal() {
                   </div>
                   <span
                     className={`rounded px-2 py-0.5 text-[10px] font-bold ${
-                      cloudSyncConfig.enabled && cloudSyncConfig.gistId
+                      cloudSyncConfig.githubToken.trim() &&
+                      cloudSyncConfig.gistId.trim() &&
+                      cloudSyncConfig.autoSync
                         ? 'bg-[#00C087]/15 text-[#00C087]'
                         : 'bg-[#1E2329] text-[#848E9C]'
                     }`}
                   >
-                    {cloudSyncConfig.enabled && cloudSyncConfig.gistId ? 'AUTO-SYNC AKTIF' : 'BELUM TERHUBUNG'}
+                    {cloudSyncConfig.githubToken.trim() &&
+                    cloudSyncConfig.gistId.trim() &&
+                    cloudSyncConfig.autoSync
+                      ? 'AUTO-SYNC AKTIF'
+                      : 'BELUM TERHUBUNG'}
                   </span>
                 </div>
 
                 <p className="text-[11px] leading-relaxed text-[#848E9C]">
-                  Simpan data di Private Secret Gist milik akun GitHub Anda sendiri (gratis &amp; privat). Buat Personal Access Token (Classic) dengan centang scope <code>gist</code> saja, lalu klik <strong>Push ke Cloud</strong>.
+                  Simpan data di Private Secret Gist milik akun GitHub Anda sendiri (gratis &amp; privat). Perubahan otomatis di-push dalam ~1.2 detik (dengan Smart Merge anti-timpa) dan otomatis ditarik saat perangkat lain dibuka atau tiap 20 detik.
                 </p>
 
                 <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
@@ -823,7 +838,13 @@ export function SettingsBackupModal() {
                       <input
                         type={showGithubToken ? 'text' : 'password'}
                         value={cloudSyncConfig.githubToken}
-                        onChange={(e) => updateCloudSyncConfig({ githubToken: e.target.value })}
+                        onChange={(e) => {
+                          const nextToken = e.target.value;
+                          updateCloudSyncConfig({
+                            githubToken: nextToken,
+                            enabled: Boolean(nextToken.trim() && cloudSyncConfig.gistId.trim()),
+                          });
+                        }}
                         placeholder="ghp_..."
                         className="font-mono min-h-[40px] w-full rounded-xl border border-[#2B3139] bg-[#161A1E] pl-3 pr-10 text-xs text-[#EAECEF]"
                       />
@@ -845,7 +866,13 @@ export function SettingsBackupModal() {
                     <input
                       type="text"
                       value={cloudSyncConfig.gistId}
-                      onChange={(e) => updateCloudSyncConfig({ gistId: e.target.value })}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        updateCloudSyncConfig({
+                          gistId: nextId,
+                          enabled: Boolean(cloudSyncConfig.githubToken.trim() && nextId.trim()),
+                        });
+                      }}
                       placeholder="Otomatis terisi saat Push pertama"
                       className="font-mono min-h-[40px] w-full rounded-xl border border-[#2B3139] bg-[#161A1E] px-3 text-xs text-[#EAECEF]"
                     />

@@ -10,6 +10,24 @@ import {
 const GIST_FILENAME = 'cryptopulse-sync.json';
 const GIST_API_BASE = 'https://api.github.com/gists';
 
+// Shared lock so remote hydration (auto-pull or manual pull) never triggers a bounce-back auto-push
+let remoteSyncLockDepth = 0;
+
+export function isApplyingRemoteSync(): boolean {
+  return remoteSyncLockDepth > 0;
+}
+
+export function withRemoteSyncLock<T>(fn: () => T): T {
+  remoteSyncLockDepth += 1;
+  try {
+    return fn();
+  } finally {
+    window.setTimeout(() => {
+      remoteSyncLockDepth = Math.max(0, remoteSyncLockDepth - 1);
+    }, 350);
+  }
+}
+
 function bytesToBase64Url(bytes: Uint8Array): string {
   const chunkSize = 0x8000;
   let binary = '';
@@ -84,7 +102,6 @@ export async function decodeSyncCode(
     return { ok: false, error: 'Kode Sync kosong.' };
   }
 
-  // Extract from full URL if user pasted the whole link
   let token = trimmed;
   const hashIdx = trimmed.indexOf('#cp-sync=');
   if (hashIdx >= 0) {
@@ -176,28 +193,213 @@ interface GitHubGistResponse {
   files?: Record<string, { content?: string; truncated?: boolean; raw_url?: string }>;
 }
 
+export interface RemoteGistSnapshot {
+  payload: CryptoPulseBackupPayload;
+  summary: BackupSummary;
+  remoteUpdatedAt: number;
+}
+
+function mergeByIdWithTimestamp<T extends { id: string; updatedAt?: number; createdAt?: number }>(
+  localList: T[],
+  remoteList: T[],
+): T[] {
+  const map = new Map<string, T>();
+  for (const item of remoteList) {
+    map.set(item.id, item);
+  }
+  for (const item of localList) {
+    const existing = map.get(item.id);
+    if (!existing) {
+      map.set(item.id, item);
+    } else {
+      const localTs = item.updatedAt ?? item.createdAt ?? 0;
+      const remoteTs = existing.updatedAt ?? existing.createdAt ?? 0;
+      map.set(item.id, localTs >= remoteTs ? item : existing);
+    }
+  }
+  return Array.from(map.values()).sort(
+    (a, b) => (b.updatedAt ?? b.createdAt ?? 0) - (a.updatedAt ?? a.createdAt ?? 0),
+  );
+}
+
 /**
- * Push seluruh state CryptoPulse ke Private GitHub Gist (`public: false`).
- * Bila `gistId` belum ada, otomatis membuat Secret Gist baru.
+ * Menggabungkan perubahan konflik antara perangkat lokal dan Cloud Gist agar setup, alert,
+ * dan watchlist dari Mobile tidak pernah tertimpa secara tidak sengaja oleh tab Web yang lama.
+ */
+export function mergeCloudPayloads(
+  local: CryptoPulseBackupPayload,
+  remote: CryptoPulseBackupPayload,
+): CryptoPulseBackupPayload {
+  const mergedWatchlist = Array.from(
+    new Set([...(local.trading.watchlist ?? []), ...(remote.trading.watchlist ?? [])]),
+  );
+
+  const mergedFutures = mergeByIdWithTimestamp(
+    local.trading.futuresSetups ?? [],
+    remote.trading.futuresSetups ?? [],
+  );
+
+  const mergedSpots = mergeByIdWithTimestamp(
+    local.trading.spotSetups ?? [],
+    remote.trading.spotSetups ?? [],
+  );
+
+  const mergedScannerLogs = mergeByIdWithTimestamp(
+    local.trading.scannerLogs ?? [],
+    remote.trading.scannerLogs ?? [],
+  ).slice(0, 60);
+
+  const mergedAlerts = mergeByIdWithTimestamp(
+    local.settings.priceAlerts ?? [],
+    remote.settings.priceAlerts ?? [],
+  );
+
+  // Portfolio: pick whichever side has the latest real user activity timestamp (or non-empty portfolio)
+  const localLastAct = local.portfolio.activityLogs?.[0]?.timestamp ?? 0;
+  const remoteLastAct = remote.portfolio.activityLogs?.[0]?.timestamp ?? 0;
+  const localHasPortfolio =
+    (local.portfolio.holdings?.length ?? 0) > 0 || (local.portfolio.usdtBalance ?? 0) > 0;
+  const remoteHasPortfolio =
+    (remote.portfolio.holdings?.length ?? 0) > 0 || (remote.portfolio.usdtBalance ?? 0) > 0;
+
+  const chooseRemotePortfolio =
+    (remoteHasPortfolio && !localHasPortfolio) ||
+    (remoteLastAct > localLastAct);
+
+  return {
+    app: 'CryptoPulse Terminal',
+    schemaVersion: 1,
+    exportedAt: Date.now(),
+    trading: {
+      ...remote.trading,
+      ...local.trading,
+      watchlist: mergedWatchlist,
+      futuresSetups: mergedFutures,
+      spotSetups: mergedSpots,
+      scannerLogs: mergedScannerLogs,
+    },
+    portfolio: chooseRemotePortfolio ? remote.portfolio : local.portfolio,
+    settings: {
+      ...remote.settings,
+      ...local.settings,
+      priceAlerts: mergedAlerts,
+      telegramConfig:
+        local.settings.telegramConfig?.botToken
+          ? local.settings.telegramConfig
+          : remote.settings.telegramConfig,
+    },
+  };
+}
+
+/**
+ * Mengambil snapshot terbaru dari Private GitHub Gist dalam 1 request (dengan cache-busting).
+ */
+export async function fetchRemoteGistSnapshot(
+  config: CloudSyncConfig,
+): Promise<{ ok: true; snapshot: RemoteGistSnapshot } | { ok: false; error: string }> {
+  const token = config.githubToken.trim();
+  const gistId = config.gistId.trim();
+  if (!token || !gistId) {
+    return { ok: false, error: 'GitHub Token dan Gist ID wajib diisi untuk sinkronisasi Cloud.' };
+  }
+
+  try {
+    const res = await fetch(`${GIST_API_BASE}/${encodeURIComponent(gistId)}?_t=${Date.now()}`, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const data = (await res.json().catch(() => ({}))) as GitHubGistResponse;
+    if (!res.ok) {
+      if (res.status === 401) return { ok: false, error: 'Token GitHub tidak valid (HTTP 401).' };
+      if (res.status === 404) return { ok: false, error: 'Gist ID tidak ditemukan di akun GitHub ini.' };
+      return { ok: false, error: data.message || `Gagal membaca Cloud Sync (HTTP ${res.status}).` };
+    }
+
+    const file = data.files?.[GIST_FILENAME];
+    if (!file) {
+      return { ok: false, error: `File ${GIST_FILENAME} tidak ditemukan di Gist tersebut.` };
+    }
+
+    let rawContent = file.content ?? '';
+    if (file.truncated && file.raw_url) {
+      const rawRes = await fetch(`${file.raw_url}?_t=${Date.now()}`, { cache: 'no-store' });
+      if (rawRes.ok) {
+        rawContent = await rawRes.text();
+      }
+    }
+
+    const validated = validateBackupJson(rawContent);
+    if (!validated.ok) {
+      return { ok: false, error: validated.error };
+    }
+
+    const remoteUpdatedAt = data.updated_at
+      ? Date.parse(data.updated_at) || validated.payload.exportedAt
+      : validated.payload.exportedAt;
+
+    return {
+      ok: true,
+      snapshot: {
+        payload: validated.payload,
+        summary: validated.summary,
+        remoteUpdatedAt,
+      },
+    };
+  } catch {
+    return { ok: false, error: 'Gagal menghubungi GitHub API. Periksa koneksi internet Anda.' };
+  }
+}
+
+/**
+ * Push state CryptoPulse ke Private GitHub Gist (`public: false`).
+ * Bila Gist sudah ada dan remote lebih baru dari `lastSyncedAt`, otomatis melakukan Smart Merge
+ * terlebih dahulu agar data dari perangkat lain (mis. Mobile) tidak pernah hilang tertimpa.
  */
 export async function pushCloudSyncGist(
   config: CloudSyncConfig,
-): Promise<{ ok: true; gistId: string; syncedAt: number; message: string } | { ok: false; error: string }> {
+  options?: { keepalive?: boolean; forceOverwrite?: boolean },
+): Promise<
+  | { ok: true; gistId: string; syncedAt: number; mergedRemote: boolean; message: string }
+  | { ok: false; error: string }
+> {
   const token = config.githubToken.trim();
   if (!token) {
     return { ok: false, error: 'GitHub Personal Access Token (scope gist) wajib diisi.' };
   }
 
-  const payload = buildBackupPayload(config.includeSecrets);
-  const content = JSON.stringify(payload, null, 2);
+  let payload = buildBackupPayload(config.includeSecrets);
   const existingId = config.gistId.trim();
+  let mergedRemote = false;
 
+  // Smart pre-push conflict check: if remote Gist was updated by another device since our last sync, merge first!
+  if (existingId && !options?.forceOverwrite && !options?.keepalive) {
+    const remoteRes = await fetchRemoteGistSnapshot(config);
+    if (remoteRes.ok) {
+      const localSyncedAt = config.lastSyncedAt ?? 0;
+      if (remoteRes.snapshot.remoteUpdatedAt > localSyncedAt) {
+        payload = mergeCloudPayloads(payload, remoteRes.snapshot.payload);
+        mergedRemote = true;
+        withRemoteSyncLock(() => {
+          restoreBackupPayload(payload);
+        });
+      }
+    }
+  }
+
+  const content = JSON.stringify(payload, null, 2);
   const url = existingId ? `${GIST_API_BASE}/${encodeURIComponent(existingId)}` : GIST_API_BASE;
   const method = existingId ? 'PATCH' : 'POST';
 
   try {
     const res = await fetch(url, {
       method,
+      cache: 'no-store',
+      keepalive: Boolean(options?.keepalive && content.length < 55_000),
       headers: {
         Accept: 'application/vnd.github+json',
         Authorization: `Bearer ${token}`,
@@ -237,9 +439,12 @@ export async function pushCloudSyncGist(
       ok: true,
       gistId: data.id,
       syncedAt,
-      message: existingId
-        ? 'Data berhasil di-push ke Cloud Sync.'
-        : `Private Cloud Sync Gist baru berhasil dibuat (${data.id.slice(0, 8)}...).`,
+      mergedRemote,
+      message: mergedRemote
+        ? 'Data digabungkan dengan perubahan perangkat lain & berhasil di-push ke Cloud.'
+        : existingId
+          ? 'Data berhasil di-push ke Cloud Sync.'
+          : `Private Cloud Sync Gist baru berhasil dibuat (${data.id.slice(0, 8)}...).`,
     };
   } catch {
     return { ok: false, error: 'Gagal menghubungi GitHub API. Periksa koneksi internet Anda.' };
@@ -247,7 +452,8 @@ export async function pushCloudSyncGist(
 }
 
 /**
- * Pull seluruh state CryptoPulse dari Private GitHub Gist dan hidrasi ke store lokal.
+ * Pull seluruh state CryptoPulse dari Private GitHub Gist dan hidrasi ke store lokal
+ * dengan lock remote-sync agar tidak memicu bounce-back push.
  */
 export async function pullCloudSyncGist(
   config: CloudSyncConfig,
@@ -255,81 +461,18 @@ export async function pullCloudSyncGist(
   | { ok: true; summary: BackupSummary; syncedAt: number; message: string }
   | { ok: false; error: string }
 > {
-  const token = config.githubToken.trim();
-  const gistId = config.gistId.trim();
-  if (!token || !gistId) {
-    return { ok: false, error: 'GitHub Token dan Gist ID wajib diisi untuk Pull dari Cloud.' };
-  }
+  const remoteRes = await fetchRemoteGistSnapshot(config);
+  if (!remoteRes.ok) return remoteRes;
 
-  try {
-    const res = await fetch(`${GIST_API_BASE}/${encodeURIComponent(gistId)}`, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
+  withRemoteSyncLock(() => {
+    restoreBackupPayload(remoteRes.snapshot.payload);
+  });
 
-    const data = (await res.json().catch(() => ({}))) as GitHubGistResponse;
-    if (!res.ok) {
-      if (res.status === 401) return { ok: false, error: 'Token GitHub tidak valid (HTTP 401).' };
-      if (res.status === 404) return { ok: false, error: 'Gist ID tidak ditemukan di akun GitHub ini.' };
-      return { ok: false, error: data.message || `Gagal Pull Cloud Sync (HTTP ${res.status}).` };
-    }
-
-    const file = data.files?.[GIST_FILENAME];
-    if (!file) {
-      return { ok: false, error: `File ${GIST_FILENAME} tidak ditemukan di Gist tersebut.` };
-    }
-
-    let rawContent = file.content ?? '';
-    if (file.truncated && file.raw_url) {
-      const rawRes = await fetch(file.raw_url, { cache: 'no-store' });
-      if (rawRes.ok) {
-        rawContent = await rawRes.text();
-      }
-    }
-
-    const validated = validateBackupJson(rawContent);
-    if (!validated.ok) {
-      return { ok: false, error: validated.error };
-    }
-
-    restoreBackupPayload(validated.payload);
-    const syncedAt = data.updated_at ? Date.parse(data.updated_at) || Date.now() : Date.now();
-    return {
-      ok: true,
-      summary: validated.summary,
-      syncedAt,
-      message: `Cloud Sync berhasil ditarik (${validated.summary.holdingsCount} aset spot, ${validated.summary.futuresSetupsCount + validated.summary.spotSetupsCount} setup jurnal).`,
-    };
-  } catch {
-    return { ok: false, error: 'Gagal menghubungi GitHub API. Periksa koneksi internet Anda.' };
-  }
-}
-
-/**
- * Cek timestamp update terakhir di Cloud Gist untuk menentukan apakah perangkat ini perlu auto-pull.
- */
-export async function fetchCloudGistUpdatedAt(config: CloudSyncConfig): Promise<number | null> {
-  const token = config.githubToken.trim();
-  const gistId = config.gistId.trim();
-  if (!token || !gistId) return null;
-
-  try {
-    const res = await fetch(`${GIST_API_BASE}/${encodeURIComponent(gistId)}`, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-      },
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as GitHubGistResponse;
-    return data.updated_at ? Date.parse(data.updated_at) || null : null;
-  } catch {
-    return null;
-  }
+  const { summary, remoteUpdatedAt } = remoteRes.snapshot;
+  return {
+    ok: true,
+    summary,
+    syncedAt: remoteUpdatedAt,
+    message: `Cloud Sync berhasil ditarik (${summary.holdingsCount} aset spot, ${summary.futuresSetupsCount + summary.spotSetupsCount} setup jurnal).`,
+  };
 }

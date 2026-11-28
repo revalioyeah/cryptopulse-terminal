@@ -49,6 +49,7 @@ export function AppShell({ children }: AppShellProps) {
   const marketSource = useAppStore((s) => s.marketSource);
   const btcCoin = useAppStore((s) => s.coinsMap.BTCUSDT);
   const scannerRunning = useAppStore((s) => s.scannerRunning);
+  const cloudSyncBusy = useAppStore((s) => s.cloudSyncBusy);
   const openPriceAlertsModal = useAppStore((s) => s.openPriceAlertsModal);
   const openSettingsModal = useAppStore((s) => s.openSettingsModal);
   const openAnalysis = useAppStore((s) => s.openAnalysis);
@@ -60,8 +61,8 @@ export function AppShell({ children }: AppShellProps) {
   const activeAlertsCount = useSettingsStore(
     (s) => s.priceAlerts.filter((a) => a.active && !a.triggered).length,
   );
-  const cloudSyncActive = useSettingsStore(
-    (s) => Boolean(s.cloudSyncConfig.enabled && s.cloudSyncConfig.gistId),
+  const cloudSyncActive = useSettingsStore((s) =>
+    Boolean(s.cloudSyncConfig.githubToken.trim() && s.cloudSyncConfig.gistId.trim()),
   );
 
   const btcPositive = (btcCoin?.priceChangePercent24h ?? 0) >= 0;
@@ -180,7 +181,9 @@ export function AppShell({ children }: AppShellProps) {
           >
             <span className="flex items-center gap-2">
               {cloudSyncActive ? (
-                <Cloud className="h-4 w-4 text-[#00C087]" />
+                <Cloud
+                  className={`h-4 w-4 text-[#00C087] ${cloudSyncBusy ? 'animate-pulse' : ''}`}
+                />
               ) : (
                 <Smartphone className="h-4 w-4 text-[#F0B90B]" />
               )}
@@ -188,12 +191,14 @@ export function AppShell({ children }: AppShellProps) {
             </span>
             <span
               className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
-                cloudSyncActive
-                  ? 'bg-[#00C087]/15 text-[#00C087]'
-                  : 'bg-[#0B0E11] text-[#848E9C]'
+                cloudSyncBusy
+                  ? 'bg-[#F0B90B]/15 text-[#F0B90B]'
+                  : cloudSyncActive
+                    ? 'bg-[#00C087]/15 text-[#00C087]'
+                    : 'bg-[#0B0E11] text-[#848E9C]'
               }`}
             >
-              {cloudSyncActive ? 'CLOUD' : 'PWA'}
+              {cloudSyncBusy ? 'SYNC...' : cloudSyncActive ? 'CLOUD' : 'PWA'}
             </span>
           </button>
 
