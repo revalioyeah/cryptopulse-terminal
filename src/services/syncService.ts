@@ -356,9 +356,72 @@ export async function fetchRemoteGistSnapshot(
 }
 
 /**
+ * Mencari otomatis Secret Gist milik pengguna yang berisi `cryptopulse-sync.json`
+ * cukup dari GitHub Token (tanpa perlu salin-tempel Gist ID manual).
+ * Memilih Gist yang paling baru diperbarui bila ada lebih dari satu.
+ */
+export async function discoverCryptoPulseGistId(
+  githubToken: string,
+): Promise<{ ok: true; gistId: string; updatedAt: number } | { ok: false; error: string }> {
+  const token = githubToken.trim();
+  if (!token) {
+    return { ok: false, error: 'GitHub Token (scope: gist) belum diisi.' };
+  }
+
+  try {
+    const res = await fetch(`${GIST_API_BASE}?per_page=100&_t=${Date.now()}`, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    if (!res.ok) {
+      if (res.status === 401) {
+        return { ok: false, error: 'Token GitHub tidak valid atau sudah kedaluwarsa (HTTP 401).' };
+      }
+      if (res.status === 403) {
+        return {
+          ok: false,
+          error: 'Token tidak memiliki izin scope `gist` (HTTP 403). Centang scope gist saat buat token.',
+        };
+      }
+      return { ok: false, error: `Gagal mendeteksi Gist (HTTP ${res.status}).` };
+    }
+
+    const list = (await res.json()) as GitHubGistResponse[];
+    if (!Array.isArray(list)) {
+      return { ok: false, error: 'Respons daftar Gist GitHub tidak valid.' };
+    }
+
+    const matches = list
+      .filter((g) => Boolean(g.id && g.files && g.files[GIST_FILENAME]))
+      .sort((a, b) => (Date.parse(b.updated_at ?? '') || 0) - (Date.parse(a.updated_at ?? '') || 0));
+
+    if (matches.length === 0 || !matches[0].id) {
+      return {
+        ok: false,
+        error: `Belum ditemukan Gist ${GIST_FILENAME} di akun GitHub ini. Klik "Push ke Cloud" di perangkat yang memiliki data terlebih dahulu.`,
+      };
+    }
+
+    return {
+      ok: true,
+      gistId: matches[0].id,
+      updatedAt: Date.parse(matches[0].updated_at ?? '') || Date.now(),
+    };
+  } catch {
+    return { ok: false, error: 'Gagal menghubungi GitHub API. Periksa koneksi internet Anda.' };
+  }
+}
+
+/**
  * Push state CryptoPulse ke Private GitHub Gist (`public: false`).
- * Bila Gist sudah ada dan remote lebih baru dari `lastSyncedAt`, otomatis melakukan Smart Merge
- * terlebih dahulu agar data dari perangkat lain (mis. Mobile) tidak pernah hilang tertimpa.
+ * Bila `gistId` masih kosong, otomatis mencari Gist `cryptopulse-sync.json` yang sudah ada terlebih dahulu
+ * agar Web dan Mobile selalu memakai 1 Gist yang sama dan tidak membuat Gist ganda.
+ * Bila remote lebih baru dari `lastSyncedAt`, otomatis melakukan Smart Merge terlebih dahulu.
  */
 export async function pushCloudSyncGist(
   config: CloudSyncConfig,
@@ -373,12 +436,20 @@ export async function pushCloudSyncGist(
   }
 
   let payload = buildBackupPayload(config.includeSecrets);
-  const existingId = config.gistId.trim();
+  let existingId = config.gistId.trim();
   let mergedRemote = false;
+
+  // Auto-discover existing CryptoPulse Gist if gistId is blank so devices never split into 2 Gists
+  if (!existingId && !options?.keepalive) {
+    const discovered = await discoverCryptoPulseGistId(token);
+    if (discovered.ok) {
+      existingId = discovered.gistId;
+    }
+  }
 
   // Smart pre-push conflict check: if remote Gist was updated by another device since our last sync, merge first!
   if (existingId && !options?.forceOverwrite && !options?.keepalive) {
-    const remoteRes = await fetchRemoteGistSnapshot(config);
+    const remoteRes = await fetchRemoteGistSnapshot({ ...config, gistId: existingId });
     if (remoteRes.ok) {
       const localSyncedAt = config.lastSyncedAt ?? 0;
       if (remoteRes.snapshot.remoteUpdatedAt > localSyncedAt) {
@@ -452,16 +523,28 @@ export async function pushCloudSyncGist(
 }
 
 /**
- * Pull seluruh state CryptoPulse dari Private GitHub Gist dan hidrasi ke store lokal
- * dengan lock remote-sync agar tidak memicu bounce-back push.
+ * Pull seluruh state CryptoPulse dari Private GitHub Gist dan hidrasi ke store lokal.
+ * Bila `gistId` belum diisi, otomatis mendeteksi Gist `cryptopulse-sync.json` milik token tersebut!
  */
 export async function pullCloudSyncGist(
   config: CloudSyncConfig,
 ): Promise<
-  | { ok: true; summary: BackupSummary; syncedAt: number; message: string }
+  | { ok: true; gistId: string; summary: BackupSummary; syncedAt: number; message: string }
   | { ok: false; error: string }
 > {
-  const remoteRes = await fetchRemoteGistSnapshot(config);
+  const token = config.githubToken.trim();
+  if (!token) {
+    return { ok: false, error: 'GitHub Token (scope: gist) wajib diisi untuk Pull dari Cloud.' };
+  }
+
+  let resolvedGistId = config.gistId.trim();
+  if (!resolvedGistId) {
+    const discovered = await discoverCryptoPulseGistId(token);
+    if (!discovered.ok) return discovered;
+    resolvedGistId = discovered.gistId;
+  }
+
+  const remoteRes = await fetchRemoteGistSnapshot({ ...config, gistId: resolvedGistId });
   if (!remoteRes.ok) return remoteRes;
 
   withRemoteSyncLock(() => {
@@ -471,6 +554,7 @@ export async function pullCloudSyncGist(
   const { summary, remoteUpdatedAt } = remoteRes.snapshot;
   return {
     ok: true,
+    gistId: resolvedGistId,
     summary,
     syncedAt: remoteUpdatedAt,
     message: `Cloud Sync berhasil ditarik (${summary.holdingsCount} aset spot, ${summary.futuresSetupsCount + summary.spotSetupsCount} setup jurnal).`,

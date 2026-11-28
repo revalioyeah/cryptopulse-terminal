@@ -7,6 +7,7 @@ import {
 import {
   decodeCloudPairCode,
   decodeSyncCode,
+  discoverCryptoPulseGistId,
   fetchRemoteGistSnapshot,
   isApplyingRemoteSync,
   pullCloudSyncGist,
@@ -155,6 +156,57 @@ export function useCloudSync() {
   const cancelIncomingPrompt = useCallback(() => {
     setIncomingPrompt(null);
   }, []);
+
+  // 1b) Auto-discover existing CryptoPulse Gist if user pasted GitHub Token without Gist ID
+  useEffect(() => {
+    const token = cloudSync.githubToken.trim();
+    const hasGistId = Boolean(cloudSync.gistId.trim());
+    if (!token || hasGistId || token.length < 20) return;
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      if (cancelled || syncingRef.current) return;
+      syncingRef.current = true;
+      setCloudSyncBusy(true);
+      try {
+        const found = await discoverCryptoPulseGistId(token);
+        if (cancelled || !found.ok) return;
+
+        const nextCfg = {
+          ...useSettingsStore.getState().cloudSyncConfig,
+          enabled: true,
+          autoSync: true,
+          gistId: found.gistId,
+          lastSyncError: undefined,
+        };
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig(nextCfg);
+        });
+
+        const pullRes = await pullCloudSyncGist(nextCfg);
+        if (!cancelled && pullRes.ok) {
+          withRemoteSyncLock(() => {
+            updateCloudSyncConfig({
+              enabled: true,
+              gistId: pullRes.gistId,
+              lastSyncedAt: pullRes.syncedAt,
+              lastSyncDirection: 'PULL',
+              lastSyncError: undefined,
+            });
+          });
+          pushToast('Gist Terdeteksi & Tersinkron', pullRes.message, 'success');
+        }
+      } finally {
+        syncingRef.current = false;
+        setCloudSyncBusy(false);
+      }
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [cloudSync.githubToken, cloudSync.gistId, pushToast, setCloudSyncBusy, updateCloudSyncConfig]);
 
   // 2) Auto-Pull on mount, visibilitychange, window focus, online reconnect, and 20s visible polling
   useEffect(() => {

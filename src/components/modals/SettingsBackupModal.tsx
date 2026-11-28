@@ -32,6 +32,7 @@ import {
   buildSyncShareUrl,
   decodeCloudPairCode,
   decodeSyncCode,
+  discoverCryptoPulseGistId,
   encodeCloudPairCode,
   pullCloudSyncGist,
   pushCloudSyncGist,
@@ -243,6 +244,7 @@ export function SettingsBackupModal() {
         withRemoteSyncLock(() => {
           updateCloudSyncConfig({
             enabled: true,
+            gistId: res.gistId,
             lastSyncedAt: res.syncedAt,
             lastSyncDirection: 'PULL',
             lastSyncError: undefined,
@@ -254,6 +256,50 @@ export function SettingsBackupModal() {
           updateCloudSyncConfig({ lastSyncError: res.error });
         });
         pushToast('Cloud Pull Gagal', res.error, 'error');
+      }
+    } finally {
+      setCloudBusy(null);
+    }
+  };
+
+  const handleDetectGist = async () => {
+    setCloudBusy('PULL');
+    try {
+      const found = await discoverCryptoPulseGistId(cloudSyncConfig.githubToken);
+      if (!found.ok) {
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig({ lastSyncError: found.error });
+        });
+        pushToast('Gist Belum Ditemukan', found.error, 'warning');
+        return;
+      }
+      const nextCfg = {
+        ...cloudSyncConfig,
+        enabled: true,
+        autoSync: true,
+        gistId: found.gistId,
+        lastSyncError: undefined,
+      };
+      withRemoteSyncLock(() => {
+        updateCloudSyncConfig(nextCfg);
+      });
+      const pullRes = await pullCloudSyncGist(nextCfg);
+      if (pullRes.ok) {
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig({
+            enabled: true,
+            gistId: pullRes.gistId,
+            lastSyncedAt: pullRes.syncedAt,
+            lastSyncDirection: 'PULL',
+            lastSyncError: undefined,
+          });
+        });
+        pushToast('Gist Ditemukan & Data Ditarik', pullRes.message, 'success');
+      } else {
+        withRemoteSyncLock(() => {
+          updateCloudSyncConfig({ lastSyncError: pullRes.error });
+        });
+        pushToast('Gist Ditemukan, Pull Gagal', pullRes.error, 'warning');
       }
     } finally {
       setCloudBusy(null);
@@ -861,21 +907,34 @@ export function SettingsBackupModal() {
 
                   <div>
                     <label className="mb-1 block text-[11px] text-[#848E9C]">
-                      Private Gist ID (kosongkan = buat baru otomatis)
+                      Private Gist ID (otomatis terdeteksi dari Token)
                     </label>
-                    <input
-                      type="text"
-                      value={cloudSyncConfig.gistId}
-                      onChange={(e) => {
-                        const nextId = e.target.value;
-                        updateCloudSyncConfig({
-                          gistId: nextId,
-                          enabled: Boolean(cloudSyncConfig.githubToken.trim() && nextId.trim()),
-                        });
-                      }}
-                      placeholder="Otomatis terisi saat Push pertama"
-                      className="font-mono min-h-[40px] w-full rounded-xl border border-[#2B3139] bg-[#161A1E] px-3 text-xs text-[#EAECEF]"
-                    />
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={cloudSyncConfig.gistId}
+                        onChange={(e) => {
+                          const nextId = e.target.value;
+                          updateCloudSyncConfig({
+                            gistId: nextId,
+                            enabled: Boolean(cloudSyncConfig.githubToken.trim() && nextId.trim()),
+                          });
+                        }}
+                        placeholder="Kosongkan / klik Deteksi"
+                        className="font-mono min-h-[40px] min-w-0 flex-1 rounded-xl border border-[#2B3139] bg-[#161A1E] px-3 text-xs text-[#EAECEF]"
+                      />
+                      <button
+                        id="btn-detect-gist"
+                        type="button"
+                        disabled={cloudBusy !== null || !cloudSyncConfig.githubToken.trim()}
+                        onClick={() => void handleDetectGist()}
+                        title="Cari Gist CryptoPulse milik token ini secara otomatis & tarik datanya"
+                        className="inline-flex min-h-[40px] shrink-0 items-center gap-1 rounded-xl border border-[#F0B90B]/50 bg-[#F0B90B]/15 px-2.5 text-xs font-semibold text-[#F0B90B] transition hover:bg-[#F0B90B] hover:text-[#0B0E11] disabled:opacity-50"
+                      >
+                        <Search className="h-3.5 w-3.5" />
+                        <span>Deteksi</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -914,11 +973,7 @@ export function SettingsBackupModal() {
                   <button
                     id="btn-cloud-pull"
                     type="button"
-                    disabled={
-                      cloudBusy !== null ||
-                      !cloudSyncConfig.githubToken.trim() ||
-                      !cloudSyncConfig.gistId.trim()
-                    }
+                    disabled={cloudBusy !== null || !cloudSyncConfig.githubToken.trim()}
                     onClick={() => void handleCloudPull()}
                     className="inline-flex min-h-[42px] items-center justify-center gap-1.5 rounded-xl border border-[#2B3139] bg-[#1E2329] px-3 text-xs font-semibold text-[#EAECEF] hover:border-[#F0B90B]/60 disabled:opacity-50"
                   >
