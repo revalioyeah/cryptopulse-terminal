@@ -8,13 +8,13 @@ import {
   resolveSectorForBase,
 } from './mockData';
 
+const envRecord = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+
 const BINANCE_REST_BASE =
-  (import.meta.env.VITE_BINANCE_REST_URL as string | undefined)?.trim() ||
-  'https://data-api.binance.vision';
+  envRecord?.VITE_BINANCE_REST_URL?.trim() || 'https://data-api.binance.vision';
 
 const BINANCE_WS_BASE =
-  (import.meta.env.VITE_BINANCE_WS_URL as string | undefined)?.trim() ||
-  'wss://data-stream.binance.vision/ws';
+  envRecord?.VITE_BINANCE_WS_URL?.trim() || 'wss://data-stream.binance.vision/ws';
 
 interface BinanceTicker24hRaw {
   symbol: string;
@@ -64,11 +64,11 @@ type BinanceKlineRaw = [
 
 async function fetchWithTimeout(url: string, timeoutMs = 8000): Promise<Response> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { signal: controller.signal });
   } finally {
-    window.clearTimeout(timer);
+    globalThis.clearTimeout(timer);
   }
 }
 
@@ -103,6 +103,7 @@ const FUTURES_LIST_TTL_MS = 6 * 60 * 60_000; // 6 hours
 let cachedFuturesMap: { fetchedAt: number; map: Map<string, string> } | null = null;
 
 function readPersistedFuturesMap(): Map<string, string> | null {
+  if (typeof window === 'undefined' || !window.localStorage) return null;
   try {
     const raw = window.localStorage.getItem(FUTURES_LIST_CACHE_KEY);
     if (!raw) return null;
@@ -124,6 +125,7 @@ function readPersistedFuturesMap(): Map<string, string> | null {
 }
 
 function persistFuturesMap(map: Map<string, string>, fetchedAt: number): void {
+  if (typeof window === 'undefined' || !window.localStorage) return;
   try {
     window.localStorage.setItem(
       FUTURES_LIST_CACHE_KEY,

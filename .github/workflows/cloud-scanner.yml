@@ -1,0 +1,46 @@
+name: CryptoPulse 24/7 Cloud Auto-Scanner (30m)
+
+on:
+  schedule:
+    # Berjalan otomatis setiap 30 menit, 24 jam sehari, 7 hari seminggu
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_summary:
+        description: 'Kirim ringkasan test ke Telegram meski belum ada sinyal lolos 6-layer'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: 'cryptopulse-cloud-scanner'
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run 6-Layer Futures Pro & Price Alert Cloud Scanner
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SYNC_GIST_TOKEN: ${{ secrets.SYNC_GIST_TOKEN }}
+          SYNC_GIST_ID: ${{ secrets.SYNC_GIST_ID }}
+          FORCE_SUMMARY: ${{ inputs.force_summary || 'false' }}
+        run: npm run scanner:cloud

@@ -1,9 +1,9 @@
 import type { Coin, CoinTokenomicsRecord, GlobalMarketData } from '../../types';
 import { buildFallbackGlobalMarket, isExcludedBinanceBase } from './mockData';
 
-const COINGECKO_BASE =
-  (import.meta.env.VITE_COINGECKO_API_URL as string | undefined)?.trim() ||
-  'https://api.coingecko.com/api/v3';
+const cgEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+
+const COINGECKO_BASE = cgEnv?.VITE_COINGECKO_API_URL?.trim() || 'https://api.coingecko.com/api/v3';
 
 interface CoinGeckoGlobalResponse {
   data?: {
@@ -88,7 +88,7 @@ const TOKENOMICS_TTL_MS = 10 * 60 * 1000; // 10 minutes cache to avoid CoinGecko
 
 export async function fetchGlobalMarketData(): Promise<GlobalMarketData> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 6000);
+  const timer = globalThis.setTimeout(() => controller.abort(), 6000);
   try {
     const res = await fetch(`${COINGECKO_BASE}/global`, { signal: controller.signal });
     if (!res.ok) throw new Error(`CoinGecko HTTP ${res.status}`);
@@ -112,7 +112,7 @@ export async function fetchGlobalMarketData(): Promise<GlobalMarketData> {
   } catch {
     return buildFallbackGlobalMarket();
   } finally {
-    window.clearTimeout(timer);
+    globalThis.clearTimeout(timer);
   }
 }
 
@@ -166,7 +166,7 @@ export async function fetchTop100Tokenomics(
   }
 
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 9000);
+  const timer = globalThis.setTimeout(() => controller.abort(), 9000);
 
   try {
     // Request Top 250 by Market Cap so after excluding stables/wrapped/non-Binance tokens we fill 100 native crypto assets
@@ -265,6 +265,6 @@ export async function fetchTop100Tokenomics(
     tokenomicsCache = { fetchedAt: now - TOKENOMICS_TTL_MS / 2, records: fallback, isFallback: true };
     return { records: fallback, isFallback: true };
   } finally {
-    window.clearTimeout(timer);
+    globalThis.clearTimeout(timer);
   }
 }

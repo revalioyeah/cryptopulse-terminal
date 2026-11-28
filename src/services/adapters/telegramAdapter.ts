@@ -49,7 +49,7 @@ export async function sendTelegramHtmlMessage(
   }
 
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 8000);
+  const timer = globalThis.setTimeout(() => controller.abort(), 8000);
 
   try {
     const url = `https://api.telegram.org/bot${encodeURIComponent(token)}/sendMessage`;
@@ -78,7 +78,7 @@ export async function sendTelegramHtmlMessage(
     const msg = err instanceof Error ? err.message : 'Gagal menghubungi Telegram API';
     return { ok: false, message: msg };
   } finally {
-    window.clearTimeout(timer);
+    globalThis.clearTimeout(timer);
   }
 }
 
@@ -89,7 +89,7 @@ export async function detectTelegramChatId(botToken: string): Promise<TelegramDe
   }
 
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 8000);
+  const timer = globalThis.setTimeout(() => controller.abort(), 8000);
 
   try {
     const url = `https://api.telegram.org/bot${encodeURIComponent(token)}/getUpdates?limit=20`;
@@ -137,7 +137,7 @@ export async function detectTelegramChatId(botToken: string): Promise<TelegramDe
     const msg = err instanceof Error ? err.message : 'Gagal menghubungi Telegram API';
     return { ok: false, message: msg };
   } finally {
-    window.clearTimeout(timer);
+    globalThis.clearTimeout(timer);
   }
 }
 
