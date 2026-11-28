@@ -529,17 +529,17 @@ export async function main(): Promise<void> {
     const futRows = futuresReport.audits
       .map(
         (a) =>
-          `| **${a.baseAsset}** | ${a.direction} | ${a.confluenceScore}/100 | ${a.backtestGrade} (PF ${a.profitFactor.toFixed(2)}) | ${a.rsi14} | ${a.adx14} | ${a.passed ? '✅ LOLOS' : `⛔ ${a.rejectReason ?? '-'}`} |`,
+          `| **${a.baseAsset}** | ${a.direction} | ${a.confluenceScore}/100 | ${a.backtestGrade} (PF ${a.profitFactor.toFixed(2)}) | ${a.fundingRate8h !== undefined ? `${a.fundingRate8h >= 0 ? '+' : ''}${a.fundingRate8h.toFixed(3)}%` : '-'} | ${a.rsVsBtc24h !== undefined ? `${a.rsVsBtc24h >= 0 ? '+' : ''}${a.rsVsBtc24h}%` : '-'} | ${a.rsi14}/${a.adx14} | ${a.passed ? '✅ LOLOS' : `⛔ ${a.rejectReason ?? '-'}`} |`,
       )
       .join('\n');
 
     summaryParts.push(
       '',
-      `### Futures Pro 6-Layer (BTC HTF ${futuresReport.htfTimeframe.toUpperCase()}: \`${futuresReport.btcHtfTrend}\`)`,
+      `### Futures Pro 8-Layer (BTC HTF ${futuresReport.htfTimeframe.toUpperCase()}: \`${futuresReport.btcHtfTrend}\`)`,
       `- **Universe:** ${futuresReport.universeCount} Binance Futures Perpetual pairs | **Evaluated:** ${futuresReport.evaluatedCount} | **Passed:** **${futuresSignalsCount}** (Telegram sent: **${futuresSentCount}**)`,
       '',
-      '| Coin | Bias | Skor | Backtest | RSI | ADX | Status |',
-      '| :--- | :---: | :---: | :---: | :---: | :---: | :--- |',
+      '| Coin | Bias | Skor | Directional BT | Fund 8h | RS vs BTC | RSI/ADX | Status |',
+      '| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |',
       futRows,
     );
   }

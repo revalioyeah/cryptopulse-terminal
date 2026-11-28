@@ -80,6 +80,15 @@ export function formatAutoScannerTelegram(log: AutoSignalLog): string {
           log.rsiReal !== undefined ? `RSI(14): <code>${log.rsiReal}</code>` : '',
           log.adxReal !== undefined ? `ADX: <code>${log.adxReal}</code>` : '',
           log.rrRatio !== undefined ? `R:R TP2: <code>1:${log.rrRatio.toFixed(2)}</code>` : '',
+          log.fundingRate8h !== undefined
+            ? `Funding 8h: <code>${log.fundingRate8h >= 0 ? '+' : ''}${log.fundingRate8h.toFixed(3)}%</code>`
+            : '',
+          log.openInterestChange24h !== undefined
+            ? `OI 24h: <code>${log.openInterestChange24h >= 0 ? '+' : ''}${log.openInterestChange24h.toFixed(1)}%</code>`
+            : '',
+          log.rsVsBtc24h !== undefined
+            ? `RS vs BTC: <code>${log.rsVsBtc24h >= 0 ? '+' : ''}${log.rsVsBtc24h}%</code>`
+            : '',
         ]
           .filter(Boolean)
           .join(' | ')

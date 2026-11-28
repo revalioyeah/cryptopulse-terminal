@@ -7,18 +7,19 @@ import type {
   EquityPoint,
   TradeDirection,
 } from '../types';
-import { calculateATR, calculateEMA, calculateRSI } from './indicators';
+import { calculateATR, calculateEMA, calculateMACD, calculateRSI } from './indicators';
 
 function buildMapByTime(points: Array<{ time: number; value: number }>): Map<number, number> {
   return new Map(points.map((p) => [p.time, p.value]));
 }
 
 /**
- * Anti Look-Ahead Bias Backtest Engine:
+ * Anti Look-Ahead Bias Backtest Engine (Directional & Slippage-Aware):
  * - Sinyal dievaluasi ketat hanya pada bar tertutup `i` menggunakan data `<= i`.
  * - Eksekusi entry selalu dilakukan di harga `open` bar berikutnya `i + 1`.
+ * - Mendukung filter arah (`LONG` saja / `SHORT` saja) agar sinyal live diaudit terhadap edge arah yang sama.
  * - Jika SL dan TP keduanya tersentuh di bar yang sama, SL diprioritaskan (konservatif).
- * - Potongan fee trading (default 0.1% / 0.001 round-trip per transaksi).
+ * - Potongan fee trading (default 0.1%) + slippage eksekusi (default 0.04% per sisi).
  */
 export function runBacktest(candles: Candle[], params: BacktestParams): BacktestResult {
   const ema20Map = buildMapByTime(calculateEMA(candles, 20));
@@ -26,6 +27,8 @@ export function runBacktest(candles: Candle[], params: BacktestParams): Backtest
   const rsiMap = buildMapByTime(calculateRSI(candles, 14));
   const atrArr = calculateATR(candles, 14);
   const atrMap = buildMapByTime(atrArr);
+  const macdArr = calculateMACD(candles, 12, 26, 9);
+  const macdMap = new Map(macdArr.map((p) => [p.time, p]));
 
   const trades: BacktestTrade[] = [];
   const equityCurve: EquityPoint[] = [];
@@ -35,6 +38,7 @@ export function runBacktest(candles: Candle[], params: BacktestParams): Backtest
 
   const riskPerTradePct = 1.0; // 1% account risk per backtest trade
   const feeRate = params.feeRate || 0.001; // 0.1%
+  const slippageRate = params.slippageRate ?? 0.0004; // 0.04% realistic perp execution slippage per side
 
   let openPosition: {
     direction: TradeDirection;
@@ -79,8 +83,9 @@ export function runBacktest(candles: Candle[], params: BacktestParams): Backtest
       }
 
       if (exitPrice !== null && outcome !== null) {
-        // Calculate fee impact normalized to risk unit
-        const feeInR = (feeRate * 2) / Math.max(openPosition.stopDistPct, 0.002);
+        // Calculate round-trip fee + slippage impact normalized to risk unit
+        const totalCostPct = (feeRate + slippageRate) * 2;
+        const feeInR = totalCostPct / Math.max(openPosition.stopDistPct, 0.003);
         const rawR = outcome === 'WIN' ? params.targetRR : -1;
         const netR = rawR - feeInR;
         const netPnlPercent = netR * riskPerTradePct;
@@ -121,7 +126,39 @@ export function runBacktest(candles: Candle[], params: BacktestParams): Backtest
 
     let signal: TradeDirection | null = null;
 
-    if (params.strategy === 'ema_pullback') {
+    if (params.strategy === 'high_conviction') {
+      // Mirrors live HIGH_CONVICTION scanner: EMA20/50 trend + MACD momentum + healthy RSI + non-overextended
+      const macdCur = macdMap.get(bar.time);
+      const macdPrev = macdMap.get(prevBar.time);
+      const distAtr = Math.abs(bar.close - ema20) / Math.max(atr, 1e-9);
+      const bullMacd = Boolean(
+        macdCur && macdPrev && (macdCur.histogram > 0 || macdCur.histogram > macdPrev.histogram),
+      );
+      const bearMacd = Boolean(
+        macdCur && macdPrev && (macdCur.histogram < 0 || macdCur.histogram < macdPrev.histogram),
+      );
+      if (
+        bar.close > ema20 &&
+        ema20 > ema50 &&
+        rsi >= 46 &&
+        rsi <= 69 &&
+        distAtr <= 2.0 &&
+        bullMacd &&
+        bar.close >= bar.open
+      ) {
+        signal = 'LONG';
+      } else if (
+        bar.close < ema20 &&
+        ema20 < ema50 &&
+        rsi >= 31 &&
+        rsi <= 54 &&
+        distAtr <= 2.0 &&
+        bearMacd &&
+        bar.close <= bar.open
+      ) {
+        signal = 'SHORT';
+      }
+    } else if (params.strategy === 'ema_pullback') {
       // Trend pullback to EMA20 with close confirmation
       if (ema20 > ema50 && bar.low <= ema20 * 1.003 && bar.close > ema20 && rsi > 45 && rsi < 68) {
         signal = 'LONG';
@@ -154,6 +191,11 @@ export function runBacktest(candles: Candle[], params: BacktestParams): Backtest
       } else if (prevRsi > 67 && rsi <= 67 && bar.close < bar.open) {
         signal = 'SHORT';
       }
+    }
+
+    // Strict directional filter when auditing a specific live LONG or SHORT candidate
+    if (signal && params.directionFilter && signal !== params.directionFilter) {
+      signal = null;
     }
 
     if (signal) {

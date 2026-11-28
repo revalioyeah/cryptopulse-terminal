@@ -16,7 +16,7 @@ async function fetchJsonWithTimeout<T>(
   timeoutMs = 5500,
 ): Promise<T | null> {
   const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  const timer = globalThis.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { ...init, signal: controller.signal });
     if (!res.ok) return null;
@@ -24,8 +24,107 @@ async function fetchJsonWithTimeout<T>(
   } catch {
     return null;
   } finally {
-    window.clearTimeout(timer);
+    globalThis.clearTimeout(timer);
   }
+}
+
+export interface BulkPerpMetric {
+  fundingRate8h: number; // percentage e.g., 0.01 = +0.01% per 8h
+  openInterestUsd: number;
+  source: 'Gate.io Perp' | 'Hyperliquid';
+}
+
+interface GateBulkTickerRow {
+  contract?: string;
+  funding_rate?: string;
+  total_size?: string;
+  mark_price?: string;
+  quanto_multiplier?: string;
+}
+
+let bulkPerpCache: { fetchedAt: number; map: Map<string, BulkPerpMetric> } | null = null;
+
+/**
+ * Mengambil Funding Rate 8h & Open Interest USD untuk ratusan kontrak perpetual sekaligus
+ * dalam 1 request cepat (Gate.io USDT Futures + fallback Hyperliquid, CORS *, Node 22 + Browser).
+ */
+export async function fetchBulkPerpMetricsMap(): Promise<Map<string, BulkPerpMetric>> {
+  const now = Date.now();
+  if (bulkPerpCache && now - bulkPerpCache.fetchedAt < 45_000) {
+    return bulkPerpCache.map;
+  }
+
+  const map = new Map<string, BulkPerpMetric>();
+
+  // 1) Gate.io bulk perpetual tickers (~1,000 contracts in one GET)
+  const gateRows = await fetchJsonWithTimeout<GateBulkTickerRow[]>(
+    'https://api.gateio.ws/api/v4/futures/usdt/tickers',
+    undefined,
+    5500,
+  );
+  if (Array.isArray(gateRows)) {
+    for (const row of gateRows) {
+      if (!row.contract || !row.contract.endsWith('_USDT')) continue;
+      const base = row.contract.slice(0, -'_USDT'.length).toUpperCase();
+      const fundingDec = Number.parseFloat(row.funding_rate ?? 'NaN');
+      if (!Number.isFinite(fundingDec)) continue;
+      const totalSize = Number.parseFloat(row.total_size ?? '0');
+      const mark = Number.parseFloat(row.mark_price ?? '0');
+      const mult = Number.parseFloat(row.quanto_multiplier ?? '1');
+      const oiUsd =
+        Number.isFinite(totalSize) && Number.isFinite(mark) && Number.isFinite(mult)
+          ? Math.max(0, totalSize * mark * mult)
+          : 0;
+
+      const metric: BulkPerpMetric = {
+        fundingRate8h: Number((fundingDec * 100).toFixed(4)),
+        openInterestUsd: oiUsd,
+        source: 'Gate.io Perp',
+      };
+      map.set(`${base}USDT`, metric);
+      if (base.startsWith('1000') && base.length > 4) {
+        const alias = `${base.slice(4)}USDT`;
+        if (!map.has(alias)) map.set(alias, metric);
+      }
+    }
+  }
+
+  // 2) Fill any missing symbols from Hyperliquid single-shot metaAndAssetCtxs
+  if (map.size < 50) {
+    const raw = await fetchJsonWithTimeout<HyperliquidMetaAndCtxs>(
+      'https://api.hyperliquid.xyz/info',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
+      },
+      5500,
+    );
+    const universe = raw?.[0]?.universe;
+    const ctxs = raw?.[1];
+    if (Array.isArray(universe) && Array.isArray(ctxs)) {
+      for (let i = 0; i < Math.min(universe.length, ctxs.length); i++) {
+        const rawName = universe[i]?.name?.toUpperCase();
+        if (!rawName) continue;
+        const base = rawName.startsWith('K') && rawName.length > 4 ? rawName.slice(1) : rawName;
+        const sym = `${base}USDT`;
+        if (map.has(sym)) continue;
+        const funding1h = Number.parseFloat(ctxs[i]?.funding ?? 'NaN');
+        const oi = Number.parseFloat(ctxs[i]?.openInterest ?? 'NaN');
+        const markPx = Number.parseFloat(ctxs[i]?.markPx ?? 'NaN');
+        if (Number.isFinite(funding1h)) {
+          map.set(sym, {
+            fundingRate8h: Number((funding1h * 8 * 100).toFixed(4)),
+            openInterestUsd: Number.isFinite(oi * markPx) ? Math.max(0, oi * markPx) : 0,
+            source: 'Hyperliquid',
+          });
+        }
+      }
+    }
+  }
+
+  bulkPerpCache = { fetchedAt: now, map };
+  return map;
 }
 
 interface GateContractStatsRow {

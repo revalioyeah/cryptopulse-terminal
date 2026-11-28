@@ -116,9 +116,9 @@ export function AutoSignalBotPanel() {
             </div>
             <p className="text-xs text-[#848E9C]">
               {isBoth
-                ? 'Dual Engine Aktif: Scan Futures Pro 6-Layer (Long & Short) + Spot Funnel 100 Coin (Outperformance → Tokenomic → Trend 1D/4H) dalam 1 siklus.'
+                ? 'Dual Engine Aktif: Scan Futures Pro 8-Layer (Kline 500b + Funding/OI + RS BTC + Directional BT) + Spot Funnel 100 Coin dalam 1 siklus.'
                 : showFutures
-                  ? '6-Layer Anti-Loss Futures (Long & Short): Real Kline TF+HTF · EMA/ADX/MACD/VWAP/RSI Div · S/R Clearance · Backtest Gate.'
+                  ? '8-Layer Institutional Futures (Long & Short): 24 Kandidat Likuid · Funding/OI Anti-Squeeze · RS vs BTC · ATR% & Wick Guard · Directional Backtest 500b.'
                   : 'Spot Funnel 100 Coin: Outperformance vs BTC → Tokenomic MCap/FDV → Trend 1D/4H Real → Layak Watchlist + 3-Layer DCA.'}
             </p>
           </div>
@@ -676,7 +676,33 @@ export function AutoSignalBotPanel() {
                       </span>
                       <span className="font-mono tabular-nums text-[10px] text-[#848E9C]">
                         RSI {a.rsi14} · ADX {a.adx14} · Vol {a.volumeRatio}x · HTF {a.htfTrend}
+                        {a.atrPercent !== undefined ? ` · ATR ${a.atrPercent}%` : ''}
                       </span>
+                      {a.fundingRate8h !== undefined && (
+                        <span
+                          className={`font-mono tabular-nums rounded px-1.5 py-0.5 text-[10px] ${
+                            Math.abs(a.fundingRate8h) >= 0.05
+                              ? 'bg-[#F6465D]/15 text-[#F6465D]'
+                              : 'bg-[#1E2329] text-[#EAECEF]'
+                          }`}
+                        >
+                          Fund {a.fundingRate8h >= 0 ? '+' : ''}
+                          {a.fundingRate8h.toFixed(3)}%
+                        </span>
+                      )}
+                      {a.rsVsBtc24h !== undefined && (
+                        <span
+                          className={`font-mono tabular-nums rounded px-1.5 py-0.5 text-[10px] ${
+                            (a.direction === 'LONG' && a.rsVsBtc24h >= 0) ||
+                            (a.direction === 'SHORT' && a.rsVsBtc24h <= 0)
+                              ? 'bg-[#00C087]/15 text-[#00C087]'
+                              : 'bg-[#1E2329] text-[#848E9C]'
+                          }`}
+                        >
+                          RS {a.rsVsBtc24h >= 0 ? '+' : ''}
+                          {a.rsVsBtc24h}%
+                        </span>
+                      )}
                       {a.poiLabel && a.poiEntryPrice && (
                         <span className="font-mono tabular-nums rounded bg-[#0B0E11] px-1.5 py-0.5 text-[10px] text-[#38BDF8]">
                           Limit {a.poiLabel} @ {formatPrice(a.poiEntryPrice)} ({(a.poiDistancePercent ?? 0) >= 0 ? '+' : ''}

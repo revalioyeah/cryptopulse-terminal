@@ -96,7 +96,11 @@ export interface SpotSetup {
   updatedAt: number;
 }
 
-export type BacktestStrategyId = 'ema_pullback' | 'breakout_volume' | 'rsi_reversal';
+export type BacktestStrategyId =
+  | 'high_conviction'
+  | 'ema_pullback'
+  | 'breakout_volume'
+  | 'rsi_reversal';
 export type BacktestGrade = 'A+' | 'A' | 'B+' | 'B' | 'C';
 
 export interface BacktestParams {
@@ -106,6 +110,8 @@ export interface BacktestParams {
   targetRR: number;
   atrMultiplier: number;
   feeRate: number; // default 0.001 (0.1%)
+  slippageRate?: number; // default 0.0004 (0.04% per side)
+  directionFilter?: TradeDirection; // evaluate ONLY LONG or SHORT trades when set
 }
 
 export interface BacktestTrade {
@@ -222,6 +228,10 @@ export interface AutoSignalLog {
   confluenceScore?: number;
   rsiReal?: number;
   adxReal?: number;
+  fundingRate8h?: number;
+  openInterestChange24h?: number;
+  rsVsBtc24h?: number;
+  atrPercent?: number;
   mcapFdvPercent?: number;
   rsVsBtc7d?: number;
   reasons?: string[];
@@ -248,8 +258,13 @@ export interface FuturesScanCandidateAudit {
   btcAligned: boolean;
   rrToResistance: number;
   poiLabel?: string;
+  poiKind?: string;
   poiEntryPrice?: number;
   poiDistancePercent?: number;
+  fundingRate8h?: number;
+  openInterestChange24h?: number;
+  rsVsBtc24h?: number;
+  atrPercent?: number;
   reasons: string[];
   rejectReason?: string;
 }

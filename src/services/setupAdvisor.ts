@@ -38,6 +38,7 @@ export interface SmartFuturesLevels {
   direction: TradeDirection;
   entryStyle: EntryExecutionStyle;
   recommendedEntryMode: EntryMode;
+  poiKind: PoiZone['kind'];
   poiLabel: string;
   poiDistancePercent: number;
   poiZoneLow: number;
@@ -251,6 +252,7 @@ export function buildSmartFuturesLevels(
     direction,
     entryStyle,
     recommendedEntryMode: entryStyle === 'POI_LIMIT' ? 'LAYERING' : 'SINGLE',
+    poiKind: targetPoi.kind,
     poiLabel,
     poiDistancePercent: entryStyle === 'POI_LIMIT' ? targetPoi.distancePercent : 0,
     poiZoneLow: targetPoi.zoneLow,
@@ -635,6 +637,7 @@ export function compareBacktestStrategies(
   atrMultiplier: number,
 ): StrategyComparisonItem[] {
   const defs: Array<{ id: BacktestStrategyId; label: string }> = [
+    { id: 'high_conviction', label: 'High-Conviction Trend' },
     { id: 'ema_pullback', label: 'EMA 20/50 Pullback' },
     { id: 'breakout_volume', label: 'Breakout + Vol' },
     { id: 'rsi_reversal', label: 'RSI Reversal' },

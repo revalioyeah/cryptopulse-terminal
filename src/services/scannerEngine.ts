@@ -16,6 +16,10 @@ import type {
 import { fetchBinanceKlines } from './adapters/binanceAdapter';
 import { getMacroAndUnlockEvents } from './adapters/calendarAdapter';
 import { fetchTop100Tokenomics } from './adapters/coinGeckoAdapter';
+import {
+  fetchBulkPerpMetricsMap,
+  fetchDerivativesSnapshot,
+} from './adapters/derivativesAdapter';
 import { runBacktest } from './backtestEngine';
 import {
   buildTechnicalSummary,
@@ -54,7 +58,8 @@ function getHigherTimeframe(tf: '15m' | '1h' | '4h'): '1h' | '4h' | '1d' {
 function mapRuleToStrategy(rule: AutoSignalConfig['rule']): BacktestStrategyId {
   if (rule === 'MOMENTUM_BREAKOUT') return 'breakout_volume';
   if (rule === 'RSI_OVERSOLD_BOUNCE') return 'rsi_reversal';
-  return 'ema_pullback';
+  if (rule === 'EMA_PULLBACK') return 'ema_pullback';
+  return 'high_conviction';
 }
 
 async function runInBatches<T, R>(
@@ -86,12 +91,15 @@ function evaluateFuturesDirectionScore(
   btcHtfTrend: 'Bullish' | 'Bearish' | 'Sideways',
   rule: AutoSignalConfig['rule'],
   symbol: string,
+  rsVsBtc24h: number,
+  fundingRate8h?: number,
 ): {
   score: number;
   rsi14: number;
   adx14: number;
   volumeRatio: number;
   atr14: number;
+  atrPercent: number;
   ema20: number;
   ema50: number;
   supports: number[];
@@ -124,6 +132,7 @@ function evaluateFuturesDirectionScore(
   const rsi14 = rsiArr[rsiArr.length - 1]?.value ?? 50;
   const prevRsi = rsiArr[rsiArr.length - 2]?.value ?? rsi14;
   const atr14 = atrArr[atrArr.length - 1]?.value ?? close * 0.012;
+  const atrPercent = Number(((atr14 / Math.max(close, 1e-9)) * 100).toFixed(2));
   const macdCur = macdArr[macdArr.length - 1];
   const macdPrev = macdArr[macdArr.length - 2];
 
@@ -138,14 +147,13 @@ function evaluateFuturesDirectionScore(
     (isLong && btcHtfTrend === 'Bullish') ||
     (!isLong && btcHtfTrend === 'Bearish');
 
-  // 1. HTF Trend Alignment (max 20 pts)
+  // 1. HTF Trend Alignment (max 18 pts)
   if ((isLong && htfTrend === 'Bullish') || (!isLong && htfTrend === 'Bearish')) {
-    score += 20;
+    score += 18;
     reasons.push(`HTF ${htfTrend} searah`);
   } else if (htfTrend === 'Sideways') {
-    score += 9;
+    score += 8;
   } else if (rule === 'RSI_OVERSOLD_BOUNCE') {
-    // Reversal rule can counter-trade HTF if real RSI divergence exists
     score += divergence === (isLong ? 'BULLISH' : 'BEARISH') ? 10 : 0;
   }
 
@@ -182,17 +190,17 @@ function evaluateFuturesDirectionScore(
   } else if (adxRes.adx >= 17 && diAligned) {
     score += 6;
   } else if (rule === 'RSI_OVERSOLD_BOUNCE' && adxRes.adx < 25) {
-    score += 6; // Mean reversion works better in moderate ADX
+    score += 6;
   }
 
-  // 4. Real Wilder RSI(14) + Divergence (max 15 pts)
+  // 4. Real Wilder RSI(14) + Divergence (max 14 pts)
   const matchingDiv = (isLong && divergence === 'BULLISH') || (!isLong && divergence === 'BEARISH');
   if (rule === 'RSI_OVERSOLD_BOUNCE') {
     if (isLong && (rsi14 <= 36 || (prevRsi < 33 && rsi14 > prevRsi))) {
-      score += 10;
+      score += 9;
       reasons.push(`RSI Oversold ${rsi14.toFixed(1)}`);
     } else if (!isLong && (rsi14 >= 64 || (prevRsi > 67 && rsi14 < prevRsi))) {
-      score += 10;
+      score += 9;
       reasons.push(`RSI Overbought ${rsi14.toFixed(1)}`);
     }
     if (matchingDiv) {
@@ -201,15 +209,15 @@ function evaluateFuturesDirectionScore(
     }
   } else {
     if (isLong && rsi14 >= 48 && rsi14 <= 69) {
-      score += 11;
+      score += 10;
       reasons.push(`RSI Sehat ${rsi14.toFixed(1)}`);
     } else if (!isLong && rsi14 >= 31 && rsi14 <= 52) {
-      score += 11;
+      score += 10;
       reasons.push(`RSI Bearish ${rsi14.toFixed(1)}`);
     } else if (isLong && rsi14 >= 40 && rsi14 < 48 && rsi14 > prevRsi) {
-      score += 8;
+      score += 7;
     } else if (!isLong && rsi14 > 52 && rsi14 <= 60 && rsi14 < prevRsi) {
-      score += 8;
+      score += 7;
     }
     if (matchingDiv) {
       score += 4;
@@ -217,24 +225,24 @@ function evaluateFuturesDirectionScore(
     }
   }
 
-  // 5. MACD Momentum & Histogram Expansion (max 10 pts)
+  // 5. MACD Momentum & Histogram Expansion (max 9 pts)
   if (macdCur && macdPrev) {
     const macdBull = macdCur.histogram > 0 && macdCur.histogram >= macdPrev.histogram;
     const macdBear = macdCur.histogram < 0 && macdCur.histogram <= macdPrev.histogram;
     const macdRecoverBull = macdCur.histogram > macdPrev.histogram;
     const macdRecoverBear = macdCur.histogram < macdPrev.histogram;
     if ((isLong && macdBull) || (!isLong && macdBear)) {
-      score += 10;
-      reasons.push('MACD Histogram Ekspansi');
+      score += 9;
+      reasons.push('MACD Ekspansi');
     } else if ((isLong && macdRecoverBull) || (!isLong && macdRecoverBear)) {
-      score += 6;
+      score += 5;
     }
   }
 
-  // 6. Real Candle Volume Spike & Rolling VWAP Position (max 10 pts)
+  // 6. Real Candle Volume Spike & Rolling VWAP Position (max 9 pts)
   const vwapAligned = isLong ? close >= vwap * 0.998 : close <= vwap * 1.002;
   if (vwapAligned) {
-    score += 5;
+    score += 4;
     reasons.push(isLong ? 'Di atas VWAP' : 'Di bawah VWAP');
   }
   if (volumeRatio >= 1.35) {
@@ -244,44 +252,117 @@ function evaluateFuturesDirectionScore(
     score += 3;
   }
 
-  // 7. Bollinger Anti-Chasing & Pullback Quality (max 10 pts)
+  // 7. Bollinger Anti-Chasing & Pullback Quality (max 8 pts)
   const distFromEma20Atr = atr14 > 0 ? Math.abs(close - ema20) / atr14 : 0;
   const healthyZone =
     isLong ? bb.percentB >= 0.25 && bb.percentB <= 0.92 : bb.percentB >= 0.08 && bb.percentB <= 0.75;
-  if (healthyZone && distFromEma20Atr <= 1.9) {
-    score += 10;
-  } else if (distFromEma20Atr <= 2.4) {
-    score += 5;
+  if (healthyZone && distFromEma20Atr <= 1.8) {
+    score += 8;
+  } else if (distFromEma20Atr <= 2.3) {
+    score += 4;
   }
 
-  // 8. BTC Macro Alignment (max 10 pts)
+  // 8. BTC Macro Alignment + Relative Strength vs BTC (max 12 pts)
   if (btcAligned) {
-    score += 10;
+    score += 6;
+  }
+  if (symbol === 'BTCUSDT') {
+    score += 4;
+  } else if (isLong) {
+    if (rsVsBtc24h >= 1.2) {
+      score += 6;
+      reasons.push(`RS +${rsVsBtc24h.toFixed(1)}% vs BTC`);
+    } else if (rsVsBtc24h >= 0) {
+      score += 3;
+    } else if (rsVsBtc24h <= -3.5) {
+      score -= 4; // Weak laggard is poor for LONG
+    }
+  } else {
+    if (rsVsBtc24h <= -1.2) {
+      score += 6;
+      reasons.push(`RS ${rsVsBtc24h.toFixed(1)}% vs BTC`);
+    } else if (rsVsBtc24h <= 0) {
+      score += 3;
+    } else if (rsVsBtc24h >= 3.5) {
+      score -= 4; // Strong leader is dangerous to SHORT
+    }
+  }
+
+  // 9. Derivatives Funding Rate Health (max 5 pts)
+  if (fundingRate8h !== undefined && Number.isFinite(fundingRate8h)) {
+    if (isLong) {
+      if (fundingRate8h <= 0.012 && fundingRate8h >= -0.04) {
+        score += 5;
+        if (fundingRate8h < 0) reasons.push(`Funding ${fundingRate8h.toFixed(3)}% (Sehat)`);
+      } else if (fundingRate8h <= 0.03) {
+        score += 2;
+      }
+    } else {
+      if (fundingRate8h >= -0.012 && fundingRate8h <= 0.04) {
+        score += 5;
+        if (fundingRate8h > 0.005) reasons.push(`Funding +${fundingRate8h.toFixed(3)}% (Sehat)`);
+      } else if (fundingRate8h >= -0.03) {
+        score += 2;
+      }
+    }
   }
 
   // === STRICT ANTI-LOSS HARD REJECTS ===
   let hardReject: string | undefined;
 
-  // Anti-FOMO / Anti-Chasing Guard
-  if (isLong && ((close - ema20) / Math.max(atr14, 1e-9) > 2.8 || rsi14 > 75)) {
-    hardReject = `Overextended / FOMO (RSI ${rsi14.toFixed(0)}, jarak EMA20 ${(
-      (close - ema20) /
-      Math.max(atr14, 1e-9)
-    ).toFixed(1)} ATR)`;
-  } else if (!isLong && ((ema20 - close) / Math.max(atr14, 1e-9) > 2.8 || rsi14 < 25)) {
-    hardReject = `Oversold / telat Short (RSI ${rsi14.toFixed(0)})`;
+  // A. Volatility Regime Guard (ATR% too dead -> eaten by fees; too extreme -> SL wick-out)
+  if (atrPercent < 0.35) {
+    hardReject = `Volatilitas terlalu rendah (ATR ${atrPercent}% < 0.35%, rawan tergerus fee)`;
+  } else if (atrPercent > 4.8) {
+    hardReject = `Volatilitas ekstrem (ATR ${atrPercent}% > 4.8%, rawan wick-out SL)`;
   }
 
-  // Choppy market guard
-  if (!hardReject && rule !== 'RSI_OVERSOLD_BOUNCE' && adxRes.adx < 15) {
-    hardReject = `Market choppy / sideways (ADX ${adxRes.adx} < 15)`;
+  // B. Crowded Funding Rate Guard (Anti Long-Squeeze / Short-Squeeze)
+  if (!hardReject && fundingRate8h !== undefined && Number.isFinite(fundingRate8h)) {
+    if (isLong && fundingRate8h >= 0.05) {
+      hardReject = `Funding terlalu panas (+${fundingRate8h.toFixed(3)}%/8h — rawan Long Squeeze)`;
+    } else if (!isLong && fundingRate8h <= -0.05) {
+      hardReject = `Funding terlalu negatif (${fundingRate8h.toFixed(3)}%/8h — rawan Short Squeeze)`;
+    }
   }
 
-  // Rule-specific real candle verification
+  // C. Last Closed Bar Rejection Wick Guard (don't Long into Shooting Star or Short into Hammer)
+  if (!hardReject && rule !== 'RSI_OVERSOLD_BOUNCE') {
+    const barRange = Math.max(lastBar.high - lastBar.low, 1e-9);
+    const upperWickRatio = (lastBar.high - Math.max(lastBar.open, lastBar.close)) / barRange;
+    const lowerWickRatio = (Math.min(lastBar.open, lastBar.close) - lastBar.low) / barRange;
+    const significantBar = barRange >= atr14 * 1.05;
+    if (isLong && significantBar && upperWickRatio >= 0.6 && lastBar.close < lastBar.open) {
+      hardReject = `Candle terakhir bearish rejection (upper wick ${Math.round(upperWickRatio * 100)}%)`;
+    } else if (!isLong && significantBar && lowerWickRatio >= 0.6 && lastBar.close > lastBar.open) {
+      hardReject = `Candle terakhir bullish rejection / hammer (lower wick ${Math.round(lowerWickRatio * 100)}%)`;
+    }
+  }
+
+  // D. Anti-FOMO / Anti-Chasing Guard
+  if (!hardReject) {
+    if (isLong && ((close - ema20) / Math.max(atr14, 1e-9) > 2.6 || rsi14 > 74)) {
+      hardReject = `Overextended / FOMO (RSI ${rsi14.toFixed(0)}, jarak EMA20 ${(
+        (close - ema20) /
+        Math.max(atr14, 1e-9)
+      ).toFixed(1)} ATR)`;
+    } else if (!isLong && ((ema20 - close) / Math.max(atr14, 1e-9) > 2.6 || rsi14 < 26)) {
+      hardReject = `Oversold / telat Short (RSI ${rsi14.toFixed(0)})`;
+    }
+  }
+
+  // E. Choppy market guard
+  if (!hardReject && rule !== 'RSI_OVERSOLD_BOUNCE' && adxRes.adx < 16) {
+    hardReject = `Market choppy / sideways (ADX ${adxRes.adx} < 16)`;
+  }
+
+  // F. Rule-specific real candle verification
   if (!hardReject) {
     if (rule === 'MOMENTUM_BREAKOUT') {
-      const nearBreakLong = structure.bosBullish || (resistances[0] ? (resistances[0] - close) / close <= 0.018 : false);
-      const nearBreakShort = structure.bosBearish || (supports[0] ? (close - supports[0]) / close <= 0.018 : false);
+      const nearBreakLong =
+        structure.bosBullish || (resistances[0] ? (resistances[0] - close) / close <= 0.018 : false);
+      const nearBreakShort =
+        structure.bosBearish || (supports[0] ? (close - supports[0]) / close <= 0.018 : false);
       const breakOk = isLong
         ? (nearBreakLong || (emaBull && lastBar.close > prevBar.high)) && volumeRatio >= 1.1
         : (nearBreakShort || (emaBear && lastBar.close < prevBar.low)) && volumeRatio >= 1.1;
@@ -290,9 +371,15 @@ function evaluateFuturesDirectionScore(
       }
     } else if (rule === 'EMA_PULLBACK') {
       const pullbackLong =
-        ema20 > ema50 && lastBar.low <= ema20 * 1.012 && lastBar.close > ema20 && lastBar.close >= lastBar.open;
+        ema20 > ema50 &&
+        lastBar.low <= ema20 * 1.012 &&
+        lastBar.close > ema20 &&
+        lastBar.close >= lastBar.open;
       const pullbackShort =
-        ema20 < ema50 && lastBar.high >= ema20 * 0.988 && lastBar.close < ema20 && lastBar.close <= lastBar.open;
+        ema20 < ema50 &&
+        lastBar.high >= ema20 * 0.988 &&
+        lastBar.close < ema20 &&
+        lastBar.close <= lastBar.open;
       if (!(isLong ? pullbackLong : pullbackShort)) {
         hardReject = 'Belum ada konfirmasi pullback & pantulan EMA 20/50 pada bar tertutup';
       }
@@ -304,32 +391,39 @@ function evaluateFuturesDirectionScore(
       }
     } else if (rule === 'HIGH_CONVICTION') {
       const htfOk = (isLong && htfTrend === 'Bullish') || (!isLong && htfTrend === 'Bearish');
-      if (!htfOk || adxRes.adx < 19 || !(isLong ? emaBull : emaBear)) {
+      if (!htfOk || adxRes.adx < 19 || !diAligned || !(isLong ? emaBull : emaBear)) {
         hardReject = `Konfluensi belum penuh (HTF ${htfTrend}, ADX ${adxRes.adx})`;
       }
     }
   }
 
   return {
-    score: Math.min(100, Math.round(score)),
+    score: Math.max(0, Math.min(100, Math.round(score))),
     rsi14: Number(rsi14.toFixed(1)),
     adx14: adxRes.adx,
     volumeRatio,
     atr14,
+    atrPercent,
     ema20,
     ema50,
     supports,
     resistances,
     btcAligned,
-    reasons: reasons.slice(0, 4),
+    reasons: reasons.slice(0, 5),
     hardReject,
   };
 }
 
 /**
- * Institutional 6-Layer Futures Pro Scanner (LONG & SHORT):
- * Liquidity Filter -> Closed Real Klines (TF + HTF + BTC) -> 8-Factor Confluence ->
- * Anti-Chasing & S/R Clearance -> Anti-Look-Ahead Backtest Quality Gate -> Structural ATR Risk Plan.
+ * Institutional 8-Layer Futures Pro Scanner (LONG & SHORT):
+ * 1) Verified Liquid Futures Universe (excluding ETFs & Gold/Wrapped tokens) + Institutional 24-Coin Pre-Filter (Majors + Watchlist + Sweet-Spot Momentum)
+ * 2) Bulk Live Perpetual Funding Rate & OI Fetch (Gate.io / Hyperliquid) + Macro/Unlock Event Guard
+ * 3) Closed Real Klines (500 bars TF + 120 bars HTF + BTC HTF)
+ * 4) Multi-Factor Confluence (HTF + EMA + ADX/DI + RSI/Div + MACD + VWAP/Vol + RS vs BTC + Funding Health)
+ * 5) ATR% Volatility Regime + Last-Bar Rejection Wick + Anti-Chasing Guards
+ * 6) Structural POI Quality & Realistic Limit Distance Gate (OB/FVG/OTE/S-R Flip <= 3.8% from live)
+ * 7) Directional Anti-Look-Ahead Backtest (500 bars, same direction, fee + slippage aware)
+ * 8) Per-Candidate Live OI 24h Change & Long/Short Crowding Check + Structural ATR Risk Plan
  */
 export async function runFuturesProScan(
   coins: Coin[],
@@ -344,18 +438,19 @@ export async function runFuturesProScan(
   const htfTimeframe = getHigherTimeframe(config.timeframe);
   const watchSet = new Set(watchlist);
 
-  onProgress?.('Menyaring likuiditas & kandidat aktif...', 10);
+  onProgress?.('Menyaring likuiditas Futures, Funding Rate & Event Makro...', 8);
 
-  // Exclude tokenized equity/ETF tickers so Futures Pro scans native crypto pairs only
-  const NON_CRYPTO_ETFS = new Set([
+  // Exclude tokenized equity/ETF, commodity gold, and wrapped staking derivatives
+  const EXCLUDED_FUTURES_BASES = new Set([
     'NVDAB', 'TSLAB', 'AAPLB', 'AMZNB', 'MSFTB', 'METAB', 'GOOGLB', 'MSTRB', 'COINB',
     'SOXLB', 'SOXSB', 'SKHYB', 'KORUB', 'QQQB', 'SPYB', 'SLVB', 'GLDB', 'INTCB', 'AMDB', 'PLTRB',
+    'PAXG', 'XAUT', 'WBTC', 'WBETH', 'BETH', 'STETH',
   ]);
 
   // Stage 1: Universe & Liquidity Filter (STRICTLY verified Futures Perpetual pairs only!)
   let universe = coins.filter((c) => {
     if (!c.hasFutures) return false;
-    if (NON_CRYPTO_ETFS.has(c.baseAsset)) return false;
+    if (EXCLUDED_FUTURES_BASES.has(c.baseAsset)) return false;
     if (config.universeScope === 'WATCHLIST') {
       return watchSet.has(c.symbol);
     }
@@ -367,57 +462,138 @@ export async function runFuturesProScan(
   }
 
   const offCooldown = universe.filter((c) => now - (cooldowns[c.symbol] ?? 0) >= cooldownMs);
+  const btcCoin = coinsMap.BTCUSDT;
+  const btcChange24h = btcCoin?.priceChangePercent24h ?? 0;
 
-  // Balanced 50/50 LONG & SHORT candidate discovery (eliminates bullish-only bias!)
-  const longScore = (c: Coin): number => {
+  // Bell-curve institutional pre-filter: rewards clean liquid structure & moderate momentum (+1%..+7.5%),
+  // penalizes FOMO overextended pumps (>12%) and guarantees Top Majors + Watchlist are ALWAYS scanned!
+  const longPreScore = (c: Coin): number => {
     const volLog = Math.log10(Math.max(c.quoteVolume24h, 100_000));
     const range = Math.max(c.high24h - c.low24h, c.price * 0.005);
     const pos = (c.price - c.low24h) / range;
+    const rs = c.priceChangePercent24h - btcChange24h;
     if (config.rule === 'RSI_OVERSOLD_BOUNCE') {
-      return Math.max(0, 50 - c.rsi14) * 1.5 + volLog * 3;
+      const dipSweetSpot =
+        c.priceChangePercent24h <= -1.5 && c.priceChangePercent24h >= -9 ? 10 : 2;
+      return dipSweetSpot + (pos <= 0.35 ? 6 : 0) + volLog * 4;
     }
-    const bullMom = c.priceChangePercent24h > 0 ? Math.min(c.priceChangePercent24h, 16) : -4;
-    return bullMom * 1.3 + (pos >= 0.72 ? 6 : 0) + volLog * 3.2;
+    const chg = c.priceChangePercent24h;
+    // Sweet spot: healthy +1.0% to +7.5% trend (penalize >12% parabolic chasing)
+    const momScore =
+      chg >= 1.0 && chg <= 7.5
+        ? 12 - Math.abs(chg - 4.0) * 0.8
+        : chg > 7.5 && chg <= 12
+          ? 6
+          : chg > 12
+            ? -5
+            : chg >= -1.0
+              ? 4
+              : -3;
+    const healthyPullbackPos = pos >= 0.45 && pos <= 0.88 ? 6 : pos > 0.94 ? -3 : 1;
+    const rsBonus = Math.max(-4, Math.min(6, rs * 0.9));
+    return momScore + healthyPullbackPos + rsBonus + volLog * 4.2;
   };
 
-  const shortScore = (c: Coin): number => {
+  const shortPreScore = (c: Coin): number => {
     const volLog = Math.log10(Math.max(c.quoteVolume24h, 100_000));
     const range = Math.max(c.high24h - c.low24h, c.price * 0.005);
     const pos = (c.price - c.low24h) / range;
+    const rs = c.priceChangePercent24h - btcChange24h;
     if (config.rule === 'RSI_OVERSOLD_BOUNCE') {
-      return Math.max(0, c.rsi14 - 50) * 1.5 + volLog * 3;
+      const pumpSweetSpot =
+        c.priceChangePercent24h >= 1.5 && c.priceChangePercent24h <= 9 ? 10 : 2;
+      return pumpSweetSpot + (pos >= 0.65 ? 6 : 0) + volLog * 4;
     }
-    const bearMom = c.priceChangePercent24h < 0 ? Math.min(Math.abs(c.priceChangePercent24h), 16) : -4;
-    return bearMom * 1.3 + (pos <= 0.28 ? 6 : 0) + volLog * 3.2;
+    const chg = c.priceChangePercent24h;
+    // Sweet spot: healthy -1.0% to -7.5% breakdown (penalize <-12% late chasing)
+    const momScore =
+      chg <= -1.0 && chg >= -7.5
+        ? 12 - Math.abs(chg + 4.0) * 0.8
+        : chg < -7.5 && chg >= -12
+          ? 6
+          : chg < -12
+            ? -5
+            : chg <= 1.0
+              ? 4
+              : -3;
+    const healthyPullbackPos = pos >= 0.12 && pos <= 0.55 ? 6 : pos < 0.06 ? -3 : 1;
+    const rsBonus = Math.max(-4, Math.min(6, -rs * 0.9));
+    return momScore + healthyPullbackPos + rsBonus + volLog * 4.2;
   };
 
-  let rankedCandidates: Coin[] = [];
-  if (config.directionFilter === 'LONG_ONLY') {
-    rankedCandidates = [...offCooldown].sort((a, b) => longScore(b) - longScore(a)).slice(0, 10);
-  } else if (config.directionFilter === 'SHORT_ONLY') {
-    rankedCandidates = [...offCooldown].sort((a, b) => shortScore(b) - shortScore(a)).slice(0, 10);
+  // Assemble up to 24 high-quality candidates:
+  // Always anchor Top 6 liquid majors + Watchlist (max 8) so clean blue-chip setups are never missed!
+  const candidateMap = new Map<string, Coin>();
+  const addCandidates = (list: Coin[], maxAdd: number) => {
+    let added = 0;
+    for (const c of list) {
+      if (added >= maxAdd) break;
+      if (!candidateMap.has(c.symbol)) {
+        candidateMap.set(c.symbol, c);
+        added += 1;
+      }
+    }
+  };
+
+  if (config.universeScope === 'WATCHLIST') {
+    addCandidates(
+      [...offCooldown].sort((a, b) => b.quoteVolume24h - a.quoteVolume24h),
+      24,
+    );
   } else {
-    // BOTH: take Top 6 Long-leaning + Top 6 Short-leaning candidates so SHORT & LONG get equal audit coverage
-    const topLongs = [...offCooldown].sort((a, b) => longScore(b) - longScore(a)).slice(0, 6);
-    const seen = new Set(topLongs.map((c) => c.symbol));
-    const topShorts = [...offCooldown]
-      .filter((c) => !seen.has(c.symbol))
-      .sort((a, b) => shortScore(b) - shortScore(a))
+    const topLiquidMajors = [...offCooldown]
+      .sort((a, b) => b.quoteVolume24h - a.quoteVolume24h)
       .slice(0, 6);
-    rankedCandidates = [...topLongs, ...topShorts];
+    const watchLiquid = offCooldown
+      .filter((c) => watchSet.has(c.symbol))
+      .sort((a, b) => b.quoteVolume24h - a.quoteVolume24h)
+      .slice(0, 4);
+
+    addCandidates(topLiquidMajors, 6);
+    addCandidates(watchLiquid, 2);
+
+    if (config.directionFilter === 'LONG_ONLY') {
+      addCandidates([...offCooldown].sort((a, b) => longPreScore(b) - longPreScore(a)), 16);
+    } else if (config.directionFilter === 'SHORT_ONLY') {
+      addCandidates([...offCooldown].sort((a, b) => shortPreScore(b) - shortPreScore(a)), 16);
+    } else {
+      addCandidates([...offCooldown].sort((a, b) => longPreScore(b) - longPreScore(a)), 8);
+      addCandidates([...offCooldown].sort((a, b) => shortPreScore(b) - shortPreScore(a)), 8);
+    }
   }
 
-  // Stage 2: Real BTC Higher-Timeframe Macro Trend
-  onProgress?.(`Cek struktur HTF BTC (${htfTimeframe.toUpperCase()})...`, 20);
-  const btcCoin = coinsMap.BTCUSDT;
-  const { candles: btcHtfRaw } = await fetchBinanceKlines(
-    'BTCUSDT',
-    htfTimeframe,
-    120,
-    btcCoin?.price,
-  );
+  const rankedCandidates = Array.from(candidateMap.values()).slice(0, 24);
+
+  // Stage 2: Parallel fetch BTC HTF Trend + Bulk Perpetual Funding/OI Map + Calendar/Unlock Events
+  onProgress?.(`Cek HTF BTC (${htfTimeframe.toUpperCase()}) & Funding Rate Perpetual...`, 16);
+  const [{ candles: btcHtfRaw }, bulkPerpMap] = await Promise.all([
+    fetchBinanceKlines('BTCUSDT', htfTimeframe, 120, btcCoin?.price),
+    fetchBulkPerpMetricsMap(),
+  ]);
   const btcHtfClosed = btcHtfRaw.length > 2 ? btcHtfRaw.slice(0, -1) : btcHtfRaw;
   const btcHtfTrend = evaluateSingleTimeframeTrend(btcHtfClosed, htfTimeframe).trend;
+
+  // Macro & Cliff Unlock calendar cross-reference
+  const calEvents = getMacroAndUnlockEvents(now);
+  const imminentUnlockSymbols = new Set(
+    calEvents
+      .filter(
+        (ev) =>
+          ev.category === 'Token Unlock' &&
+          ev.symbol &&
+          (ev.unlockSupplyPercent ?? 0) >= 1.0 &&
+          ev.timestamp >= now &&
+          ev.timestamp - now <= 72 * 3600 * 1000,
+      )
+      .map((ev) => ev.symbol!),
+  );
+  const imminentHighMacro = calEvents.find(
+    (ev) =>
+      ev.category !== 'Token Unlock' &&
+      ev.impact === 'High' &&
+      ev.timestamp >= now &&
+      ev.timestamp - now <= 4 * 3600 * 1000,
+  );
 
   if (rankedCandidates.length === 0) {
     return {
@@ -436,7 +612,7 @@ export async function runFuturesProScan(
     };
   }
 
-  // Stage 3-5: Evaluate balanced Long & Short candidates on REAL closed Klines in concurrent batches of 4
+  // Stage 3-8: Evaluate all 24 candidates on REAL 500 closed Klines + Directional Backtest + Live Derivatives
   const strategy = mapRuleToStrategy(config.rule);
   let doneCount = 0;
 
@@ -451,19 +627,22 @@ export async function runFuturesProScan(
     4,
     async (coin) => {
       const [{ candles: primaryRaw }, { candles: htfRaw }] = await Promise.all([
-        fetchBinanceKlines(coin.symbol, config.timeframe, 300, coin.price),
+        fetchBinanceKlines(coin.symbol, config.timeframe, 500, coin.price),
         fetchBinanceKlines(coin.symbol, htfTimeframe, 120, coin.price),
       ]);
 
       doneCount += 1;
       onProgress?.(
-        `Validasi Kline & POI ${config.timeframe.toUpperCase()}+${htfTimeframe.toUpperCase()} (${doneCount}/${rankedCandidates.length}: ${coin.baseAsset})...`,
-        25 + Math.round((doneCount / rankedCandidates.length) * 65),
+        `Validasi Kline 500b, Funding & POI (${doneCount}/${rankedCandidates.length}: ${coin.baseAsset})...`,
+        20 + Math.round((doneCount / rankedCandidates.length) * 72),
       );
 
       const closed = primaryRaw.length > 60 ? primaryRaw.slice(0, -1) : primaryRaw;
       const htfClosed = htfRaw.length > 35 ? htfRaw.slice(0, -1) : htfRaw;
       const htfTrend = evaluateSingleTimeframeTrend(htfClosed, htfTimeframe).trend;
+      const rsVsBtc24h = Number((coin.priceChangePercent24h - btcChange24h).toFixed(2));
+      const bulkMetric = bulkPerpMap.get(coin.symbol);
+      let fundingRate8h = bulkMetric?.fundingRate8h;
 
       // Evaluate LONG & SHORT objectively and pick best valid direction per directionFilter
       const longEval = evaluateFuturesDirectionScore(
@@ -473,6 +652,8 @@ export async function runFuturesProScan(
         btcHtfTrend,
         config.rule,
         coin.symbol,
+        rsVsBtc24h,
+        fundingRate8h,
       );
       const shortEval = evaluateFuturesDirectionScore(
         'SHORT',
@@ -481,6 +662,8 @@ export async function runFuturesProScan(
         btcHtfTrend,
         config.rule,
         coin.symbol,
+        rsVsBtc24h,
+        fundingRate8h,
       );
 
       let chosenDir: TradeDirection = 'LONG';
@@ -507,7 +690,17 @@ export async function runFuturesProScan(
       // Compute institutional Limit Pullback POI Levels (OB / FVG / OTE / S-R Flip) instead of market chasing
       const smartPoi = buildSmartFuturesLevels(closed, coin.price, chosenDir, 1.5, 'POI_LIMIT');
 
-      // Run Anti-Look-Ahead Backtest on 300 real closed candles
+      // Structural POI bonus/penalty (genuine OB/FVG/OTE > SR_FLIP > EMA_VWAP fallback)
+      let adjustedScore = chosenEval.score;
+      if (smartPoi.poiKind === 'OB' || smartPoi.poiKind === 'FVG' || smartPoi.poiKind === 'OTE') {
+        adjustedScore = Math.min(100, adjustedScore + 4);
+      } else if (smartPoi.poiKind === 'SR_FLIP') {
+        adjustedScore = Math.min(100, adjustedScore + 2);
+      } else if (config.rule === 'HIGH_CONVICTION') {
+        adjustedScore = Math.max(0, adjustedScore - 4);
+      }
+
+      // Run DIRECTIONAL Anti-Look-Ahead Backtest on 500 real closed candles with slippage
       const bt = runBacktest(closed, {
         symbol: coin.symbol,
         strategy,
@@ -515,6 +708,8 @@ export async function runFuturesProScan(
         targetRR: 2.2,
         atrMultiplier: 1.5,
         feeRate: 0.001,
+        slippageRate: 0.0004,
+        directionFilter: chosenDir,
       });
 
       const slDist = Math.abs(smartPoi.avgEntry - smartPoi.stopLoss);
@@ -530,36 +725,90 @@ export async function runFuturesProScan(
             : slDist * 2.5;
       const rrToResistance = Number((opposingDist / Math.max(slDist, 1e-9)).toFixed(2));
 
-      // Apply ALL Anti-Loss Quality Gates in strict order
+      // Apply ALL Institutional Anti-Loss Quality Gates in strict order
       let rejectReason = chosenEval.hardReject;
 
+      if (!rejectReason && chosenDir === 'LONG' && imminentUnlockSymbols.has(coin.symbol)) {
+        rejectReason = `Waspada Cliff Token Unlock besar < 72 jam — hindari LONG`;
+      }
       if (!rejectReason && config.requireBtcAlignment && !chosenEval.btcAligned) {
         rejectReason = `Melawan trend HTF BTC (${btcHtfTrend})`;
       }
-      if (!rejectReason && rrToResistance < 1.15) {
-        rejectReason = `Ruang dari Limit POI ke ${chosenDir === 'LONG' ? 'Resistance' : 'Support'} terlalu sempit (R:R ${rrToResistance} < 1.15)`;
+      if (!rejectReason && Math.abs(smartPoi.poiDistancePercent) > 3.8) {
+        rejectReason = `Zona Limit POI terlalu jauh (${smartPoi.poiDistancePercent}% > 3.8% dari live)`;
       }
-      if (!rejectReason && chosenEval.score < config.minConfluenceScore) {
-        rejectReason = `Skor Konfluensi ${chosenEval.score}/100 < batas ${config.minConfluenceScore}`;
+      if (!rejectReason && rrToResistance < 1.2) {
+        rejectReason = `Ruang dari Limit POI ke ${chosenDir === 'LONG' ? 'Resistance' : 'Support'} terlalu sempit (R:R ${rrToResistance} < 1.20)`;
       }
-      if (!rejectReason && bt.totalTrades < 3) {
-        rejectReason = `Sampel backtest terlalu sedikit (${bt.totalTrades} trade)`;
+      if (!rejectReason && bt.totalTrades < 4) {
+        rejectReason = `Sampel backtest ${chosenDir} terlalu sedikit (${bt.totalTrades} trade / 500 bar)`;
       }
       if (!rejectReason && GRADE_RANK[bt.grade] < GRADE_RANK[config.minBacktestGrade]) {
-        rejectReason = `Backtest Grade ${bt.grade} < min ${config.minBacktestGrade} (PF ${bt.profitFactor})`;
+        rejectReason = `Backtest ${chosenDir} Grade ${bt.grade} < min ${config.minBacktestGrade} (PF ${bt.profitFactor})`;
       }
       if (!rejectReason && bt.profitFactor < config.minProfitFactor) {
-        rejectReason = `Backtest Profit Factor ${bt.profitFactor} < min ${config.minProfitFactor}`;
+        rejectReason = `Backtest ${chosenDir} PF ${bt.profitFactor} < min ${config.minProfitFactor}`;
+      }
+
+      // Deep per-coin Live Derivatives check (OI 24h Change & Long/Short Crowding) ONLY for finalists!
+      let openInterestChange24h: number | undefined;
+      const extraReasons: string[] = [];
+
+      if (!rejectReason) {
+        try {
+          const deriv = await fetchDerivativesSnapshot(coin);
+          if (!deriv.isMock) {
+            fundingRate8h = deriv.fundingRate8h;
+            if (chosenDir === 'LONG' && deriv.fundingRate8h >= 0.05) {
+              rejectReason = `Funding live panas (+${deriv.fundingRate8h.toFixed(3)}%/8h — rawan Long Squeeze)`;
+            } else if (chosenDir === 'SHORT' && deriv.fundingRate8h <= -0.05) {
+              rejectReason = `Funding live negatif ekstrem (${deriv.fundingRate8h.toFixed(3)}%/8h — rawan Short Squeeze)`;
+            }
+
+            if (!rejectReason && deriv.oiChangeAvailable) {
+              openInterestChange24h = deriv.openInterestChange24h;
+              if (deriv.openInterestChange24h >= 2.0) {
+                adjustedScore = Math.min(100, adjustedScore + 4);
+                extraReasons.push(`OI 24h +${deriv.openInterestChange24h.toFixed(1)}% (Uang Baru)`);
+              } else if (deriv.openInterestChange24h <= -6.0) {
+                adjustedScore = Math.max(0, adjustedScore - 3);
+              }
+            }
+
+            if (!rejectReason && deriv.longShortAvailable) {
+              if (chosenDir === 'LONG' && deriv.longRatioPercent >= 74) {
+                adjustedScore = Math.max(0, adjustedScore - 5);
+              } else if (chosenDir === 'SHORT' && deriv.shortRatioPercent >= 74) {
+                adjustedScore = Math.max(0, adjustedScore - 5);
+              }
+            }
+          }
+        } catch {
+          // Non-fatal: bulk funding metric already checked
+        }
+      }
+
+      if (!rejectReason && adjustedScore < config.minConfluenceScore) {
+        rejectReason = `Skor Konfluensi ${adjustedScore}/100 < batas ${config.minConfluenceScore}`;
+      }
+
+      if (imminentHighMacro) {
+        extraReasons.push(`⚠️ Event ${imminentHighMacro.title} <4j`);
       }
 
       const passed = !rejectReason;
+      const mergedReasons = [
+        `Limit ${smartPoi.poiLabel} (${smartPoi.poiDistancePercent >= 0 ? '+' : ''}${smartPoi.poiDistancePercent}%)`,
+        ...extraReasons,
+        ...chosenEval.reasons,
+      ].slice(0, 5);
 
       const audit: FuturesScanCandidateAudit = {
         symbol: coin.symbol,
         baseAsset: coin.baseAsset,
         direction: chosenDir,
         passed,
-        confluenceScore: chosenEval.score,
+        confluenceScore: adjustedScore,
         backtestGrade: bt.grade,
         profitFactor: bt.profitFactor,
         winRate: bt.winRate,
@@ -570,17 +819,19 @@ export async function runFuturesProScan(
         btcAligned: chosenEval.btcAligned,
         rrToResistance,
         poiLabel: smartPoi.poiLabel,
+        poiKind: smartPoi.poiKind,
         poiEntryPrice: smartPoi.entry1,
         poiDistancePercent: smartPoi.poiDistancePercent,
-        reasons: [
-          `Limit ${smartPoi.poiLabel} (${smartPoi.poiDistancePercent >= 0 ? '+' : ''}${smartPoi.poiDistancePercent}%)`,
-          ...chosenEval.reasons,
-        ].slice(0, 4),
+        fundingRate8h,
+        openInterestChange24h,
+        rsVsBtc24h,
+        atrPercent: chosenEval.atrPercent,
+        reasons: mergedReasons,
         rejectReason,
       };
 
       if (!passed) {
-        return { audit, rankWeight: chosenEval.score };
+        return { audit, rankWeight: adjustedScore };
       }
 
       // Build Production Futures Limit POI Layering Setup & Signal Log
@@ -602,7 +853,15 @@ export async function runFuturesProScan(
         leverage: Math.min(config.defaultLeverage, smartPoi.recommendedLeverage),
       });
 
-      const summary = `Limit ${smartPoi.poiLabel} (${smartPoi.poiDistancePercent >= 0 ? '+' : ''}${smartPoi.poiDistancePercent}% dari live) | Skor ${chosenEval.score} · Grade ${bt.grade} (PF ${bt.profitFactor}) | HTF ${htfTrend} | RSI ${chosenEval.rsi14} | ADX ${chosenEval.adx14}`;
+      const fundingTag =
+        fundingRate8h !== undefined
+          ? ` | Fund ${fundingRate8h >= 0 ? '+' : ''}${fundingRate8h.toFixed(3)}%`
+          : '';
+      const oiTag =
+        openInterestChange24h !== undefined
+          ? ` | OI ${openInterestChange24h >= 0 ? '+' : ''}${openInterestChange24h.toFixed(1)}%`
+          : '';
+      const summary = `Limit ${smartPoi.poiLabel} (${smartPoi.poiDistancePercent >= 0 ? '+' : ''}${smartPoi.poiDistancePercent}%) | Skor ${adjustedScore} · BT ${chosenDir} ${bt.grade} (PF ${bt.profitFactor}, ${bt.totalTrades}t)${fundingTag}${oiTag} | RS ${rsVsBtc24h >= 0 ? '+' : ''}${rsVsBtc24h}% vs BTC`;
 
       const log: AutoSignalLog = {
         id: generateId('sig'),
@@ -619,11 +878,15 @@ export async function runFuturesProScan(
         stopLoss: smartPoi.stopLoss,
         takeProfit: smartPoi.tp2,
         rrRatio: risk.netRrTp2,
-        confluenceScore: chosenEval.score,
+        confluenceScore: adjustedScore,
         rsiReal: chosenEval.rsi14,
         adxReal: chosenEval.adx14,
-        reasons: audit.reasons,
-        scoreOrGrade: `Skor ${chosenEval.score} · Grade ${bt.grade}`,
+        fundingRate8h,
+        openInterestChange24h,
+        rsVsBtc24h,
+        atrPercent: chosenEval.atrPercent,
+        reasons: mergedReasons,
+        scoreOrGrade: `Skor ${adjustedScore} · BT ${bt.grade}`,
         summary,
         telegramSent: false,
         savedToJournal: false,
@@ -663,7 +926,10 @@ export async function runFuturesProScan(
         btcBetaAligned: chosenEval.btcAligned,
         confluenceChecks: [
           `Limit POI: ${smartPoi.poiLabel}`,
-          `Backtest Grade ${bt.grade} · PF ${bt.profitFactor}`,
+          `Directional BT ${chosenDir}: Grade ${bt.grade} · PF ${bt.profitFactor} (${bt.totalTrades} trade)`,
+          ...(fundingRate8h !== undefined
+            ? [`Funding 8h: ${fundingRate8h >= 0 ? '+' : ''}${fundingRate8h.toFixed(4)}%`]
+            : []),
           ...chosenEval.reasons,
         ],
         notes: summary,
@@ -676,7 +942,7 @@ export async function runFuturesProScan(
       return {
         audit,
         signal: { log, setup },
-        rankWeight: chosenEval.score * Math.min(bt.profitFactor, 3),
+        rankWeight: adjustedScore * Math.min(bt.profitFactor, 3),
       };
     },
   );
@@ -694,7 +960,7 @@ export async function runFuturesProScan(
     .slice(0, 3)
     .map((item) => item.signal);
 
-  onProgress?.('Selesai memvalidasi sinyal Long & Short berbasis Limit POI.', 100);
+  onProgress?.('Selesai memvalidasi 8-Layer Futures Pro (Kline + Funding/OI + POI).', 100);
 
   return {
     report: {

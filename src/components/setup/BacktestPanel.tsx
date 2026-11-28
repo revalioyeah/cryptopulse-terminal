@@ -13,6 +13,11 @@ interface BacktestPanelProps {
 
 const STRATEGIES: Array<{ id: BacktestStrategyId; label: string; desc: string }> = [
   {
+    id: 'high_conviction',
+    label: 'High-Conviction (EMA + MACD + RSI)',
+    desc: 'Strategi utama Scanner Pro: trend EMA 20/50 + ekspansi MACD + RSI sehat.',
+  },
+  {
     id: 'ema_pullback',
     label: 'EMA 20/50 Pullback',
     desc: 'Ikuti trend EMA 20/50 saat retest dinamis di area nilai.',
