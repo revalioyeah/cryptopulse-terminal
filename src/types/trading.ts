@@ -169,7 +169,8 @@ export interface SetupDraftPayload {
   notes?: string;
 }
 
-export type AutoSignalMode = 'FUTURES' | 'SPOT_DCA';
+export type AutoSignalMode = 'BOTH' | 'FUTURES' | 'SPOT_DCA';
+export type AutoSignalLogMode = 'FUTURES' | 'SPOT_DCA';
 export type AutoSignalRule =
   | 'MOMENTUM_BREAKOUT'
   | 'EMA_PULLBACK'
@@ -207,7 +208,7 @@ export interface AutoSignalLog {
   id: string;
   symbol: string;
   baseAsset: string;
-  mode: AutoSignalMode;
+  mode: AutoSignalLogMode;
   rule: AutoSignalRule;
   direction: TradeDirection | 'ACCUMULATE';
   timeframe?: Timeframe;

@@ -1,8 +1,17 @@
 import { appendFileSync } from 'node:fs';
 import { fetchBinanceTickers24h } from '../src/services/adapters/binanceAdapter';
 import { sendTelegramHtmlMessage } from '../src/services/adapters/telegramAdapter';
-import { runFuturesProScan } from '../src/services/scannerEngine';
-import type { AutoSignalConfig, Coin, PriceAlert, TradeSetup } from '../src/types';
+import { runFuturesProScan, runSpot100FunnelScan } from '../src/services/scannerEngine';
+import type {
+  AutoSignalConfig,
+  AutoSignalMode,
+  Coin,
+  FuturesScanReport,
+  PriceAlert,
+  SpotFunnelReport,
+  SpotSetup,
+  TradeSetup,
+} from '../src/types';
 import { formatPrice } from '../src/utils/format';
 import {
   formatAutoScannerTelegram,
@@ -19,7 +28,7 @@ interface GistStateFile {
   trading: {
     watchlist: string[];
     futuresSetups: TradeSetup[];
-    spotSetups: unknown[];
+    spotSetups: SpotSetup[];
     maxDailySlHits: number;
     scannerConfig: Partial<AutoSignalConfig>;
     scannerLogs: Array<Record<string, unknown>>;
@@ -49,7 +58,7 @@ interface GitHubGistRaw {
 const DEFAULT_CLOUD_SCANNER_CONFIG: AutoSignalConfig = {
   enabled: true,
   intervalSeconds: 1800,
-  mode: 'FUTURES',
+  mode: 'BOTH',
   rule: 'HIGH_CONVICTION',
   timeframe: '1h',
   directionFilter: 'BOTH',
@@ -63,13 +72,21 @@ const DEFAULT_CLOUD_SCANNER_CONFIG: AutoSignalConfig = {
   minSpotScore: 68,
   minMcapFdvRatio: 0.55,
   autoAddWatchlist: false,
-  cooldownSeconds: 10_800, // 3 hours anti-spam default for 24/7 cloud runs
+  cooldownSeconds: 10_800, // 3 hours anti-spam default for Futures 24/7 cloud runs
   autoSendTelegram: true,
   autoSaveJournal: false,
   defaultFuturesEquity: 5000,
   defaultRiskPercent: 1.0,
   defaultSpotBudget: 1000,
 };
+
+function resolveCloudScanMode(raw?: string): AutoSignalMode {
+  const normalized = raw?.trim().toUpperCase();
+  if (normalized === 'FUTURES' || normalized === 'SPOT_DCA' || normalized === 'BOTH') {
+    return normalized;
+  }
+  return 'BOTH';
+}
 
 async function loadCloudGist(
   gistToken: string,
@@ -170,11 +187,14 @@ export async function main(): Promise<void> {
   const startedAt = Date.now();
   const dryRun = process.env.DRY_RUN === 'true';
   const forceSummary = process.env.FORCE_SUMMARY === 'true';
+  const effectiveMode = resolveCloudScanMode(process.env.SCAN_MODE);
   const syncGistToken = process.env.SYNC_GIST_TOKEN?.trim() || '';
   const syncGistIdEnv = process.env.SYNC_GIST_ID?.trim() || '';
 
   console.log('=== CryptoPulse Terminal — 24/7 Cloud Auto-Scanner (30m Cron) ===');
-  console.log(`UTC Time: ${new Date().toISOString()} | DryRun: ${dryRun} | ForceSummary: ${forceSummary}`);
+  console.log(
+    `UTC Time: ${new Date().toISOString()} | Mode: ${effectiveMode} | DryRun: ${dryRun} | ForceSummary: ${forceSummary}`,
+  );
 
   // 1) Load live Binance Spot + Verified Binance Futures Perpetual list
   const tickerRes = await fetchBinanceTickers24h();
@@ -252,11 +272,11 @@ export async function main(): Promise<void> {
     }
   }
 
-  // 4) Run Institutional 6-Layer Futures Pro Scanner (LONG & SHORT + SMC Limit Pullback POI)
+  // Build merged scanner config (Cloud always runs BOTH Futures + Spot by default unless SCAN_MODE overrides)
   const mergedConfig: AutoSignalConfig = {
     ...DEFAULT_CLOUD_SCANNER_CONFIG,
     ...(cloudGist?.state.trading.scannerConfig ?? {}),
-    mode: 'FUTURES',
+    mode: effectiveMode,
     cooldownSeconds: Math.max(
       1800,
       cloudGist?.state.trading.scannerConfig?.cooldownSeconds ??
@@ -272,90 +292,222 @@ export async function main(): Promise<void> {
     'XRPUSDT',
     'SUIUSDT',
   ];
-  const cooldowns = { ...(cloudGist?.state.trading.scannerCooldowns ?? {}) };
+  const rawCooldowns = { ...(cloudGist?.state.trading.scannerCooldowns ?? {}) };
 
-  const output = await runFuturesProScan(
-    coins,
-    coinsMap,
-    watchlist,
-    cooldowns,
-    mergedConfig,
-    (label, pct) => {
-      console.log(`[Scan ${pct}%] ${label}`);
-    },
-  );
+  const shouldRunFutures = effectiveMode === 'BOTH' || effectiveMode === 'FUTURES';
+  const shouldRunSpot = effectiveMode === 'BOTH' || effectiveMode === 'SPOT_DCA';
 
-  console.log(
-    `[Scan Complete] BTC HTF (${output.report.htfTimeframe.toUpperCase()}): ${output.report.btcHtfTrend} | Universe: ${output.report.universeCount} | Evaluated: ${output.report.evaluatedCount} | Passed: ${output.signals.length}`,
-  );
+  let futuresReport: FuturesScanReport | null = null;
+  let futuresSignalsCount = 0;
+  let futuresSentCount = 0;
 
-  let signalsSentCount = 0;
+  // 4A) Run Institutional 6-Layer Futures Pro Scanner (LONG & SHORT + SMC Limit Pullback POI)
+  if (shouldRunFutures) {
+    const futuresOutput = await runFuturesProScan(
+      coins,
+      coinsMap,
+      watchlist,
+      rawCooldowns,
+      mergedConfig,
+      (label, pct) => {
+        console.log(`[Futures ${pct}%] ${label}`);
+      },
+    );
 
-  for (const item of output.signals) {
-    let sent = false;
-    if (telegramReady && !dryRun) {
-      const res = await sendTelegramHtmlMessage(
-        { botToken, chatId },
-        formatAutoScannerTelegram(item.log),
-      );
-      sent = res.ok;
-      if (res.ok) signalsSentCount += 1;
-      console.log(
-        `[Telegram Signal] ${item.log.direction} ${item.log.symbol} (${item.log.scoreOrGrade}): ${res.ok ? 'SENT' : `FAILED (${res.message})`}`,
-      );
-    } else {
-      console.log(
-        `[DryRun/NoTelegram Signal] ${item.log.direction} ${item.log.symbol} @ ${formatPrice(item.log.entryPrice)} | SL ${formatPrice(item.log.stopLoss ?? 0)} | TP ${formatPrice(item.log.takeProfit ?? 0)} | ${item.log.scoreOrGrade}`,
-      );
-    }
+    futuresReport = futuresOutput.report;
+    futuresSignalsCount = futuresOutput.signals.length;
 
-    if (cloudGist) {
-      item.log.telegramSent = sent;
-      cloudGist.state.trading.scannerCooldowns = {
-        ...(cloudGist.state.trading.scannerCooldowns ?? {}),
-        [item.log.symbol]: Date.now(),
-      };
-      cloudGist.state.trading.scannerLogs = [
-        item.log as unknown as Record<string, unknown>,
-        ...(cloudGist.state.trading.scannerLogs ?? []),
-      ].slice(0, 60);
+    console.log(
+      `[Futures Complete] BTC HTF (${futuresReport.htfTimeframe.toUpperCase()}): ${futuresReport.btcHtfTrend} | Universe: ${futuresReport.universeCount} | Evaluated: ${futuresReport.evaluatedCount} | Passed: ${futuresSignalsCount}`,
+    );
 
-      if (mergedConfig.autoSaveJournal) {
-        cloudGist.state.trading.futuresSetups = [
-          item.setup,
-          ...(cloudGist.state.trading.futuresSetups ?? []),
-        ];
-        item.log.savedToJournal = true;
+    for (const item of futuresOutput.signals) {
+      let sent = false;
+      if (telegramReady && !dryRun) {
+        const res = await sendTelegramHtmlMessage(
+          { botToken, chatId },
+          formatAutoScannerTelegram(item.log),
+        );
+        sent = res.ok;
+        if (res.ok) futuresSentCount += 1;
+        console.log(
+          `[Telegram Futures] ${item.log.direction} ${item.log.symbol} (${item.log.scoreOrGrade}): ${res.ok ? 'SENT' : `FAILED (${res.message})`}`,
+        );
+      } else {
+        console.log(
+          `[DryRun/NoTelegram Futures] ${item.log.direction} ${item.log.symbol} @ ${formatPrice(item.log.entryPrice)} | SL ${formatPrice(item.log.stopLoss ?? 0)} | TP ${formatPrice(item.log.takeProfit ?? 0)} | ${item.log.scoreOrGrade}`,
+        );
       }
-      gistDirty = true;
+
+      if (cloudGist) {
+        item.log.telegramSent = sent;
+        cloudGist.state.trading.scannerCooldowns = {
+          ...(cloudGist.state.trading.scannerCooldowns ?? {}),
+          [item.log.symbol]: Date.now(),
+        };
+        cloudGist.state.trading.scannerLogs = [
+          item.log as unknown as Record<string, unknown>,
+          ...(cloudGist.state.trading.scannerLogs ?? []),
+        ].slice(0, 60);
+
+        if (mergedConfig.autoSaveJournal) {
+          cloudGist.state.trading.futuresSetups = [
+            item.setup,
+            ...(cloudGist.state.trading.futuresSetups ?? []),
+          ];
+          item.log.savedToJournal = true;
+        }
+        gistDirty = true;
+      }
     }
   }
 
+  let spotReport: SpotFunnelReport | null = null;
+  let spotSignalsCount = 0;
+  let spotSentCount = 0;
+
+  // 4B) Run 100-Coin Institutional Spot Accumulation Funnel (Outperformance → Tokenomics → Trend 1D/4H → Watchlist + 3-Layer DCA)
+  if (shouldRunSpot) {
+    // Dedicated Spot cooldown namespace (SPOT:<symbol>) with >= 6h cooldown to prevent 30m Spot DCA spam
+    const spotCooldowns: Record<string, number> = {};
+    for (const [key, ts] of Object.entries(rawCooldowns)) {
+      if (key.startsWith('SPOT:')) {
+        spotCooldowns[key.slice(5)] = ts;
+      }
+    }
+
+    const spotConfig: AutoSignalConfig = {
+      ...mergedConfig,
+      cooldownSeconds: Math.max(21_600, mergedConfig.cooldownSeconds),
+    };
+
+    const spotOutput = await runSpot100FunnelScan(
+      coins,
+      coinsMap,
+      spotCooldowns,
+      spotConfig,
+      true,
+      (label, pct) => {
+        console.log(`[Spot 100 ${pct}%] ${label}`);
+      },
+    );
+
+    spotReport = spotOutput.report;
+    spotSignalsCount = spotOutput.signals.length;
+
+    console.log(
+      `[Spot Complete] Top ${spotReport.initialCount} → Outperf: ${spotReport.afterOutperformance} → Tokenomic: ${spotReport.afterTokenomics} → Trend 1D/4H: ${spotReport.afterTrend} → Watchlist Ready: ${spotReport.watchlistReady} | New Signals: ${spotSignalsCount}`,
+    );
+
+    if (cloudGist && mergedConfig.autoAddWatchlist) {
+      const readySymbols = spotReport.candidates
+        .filter((c) => c.stageReached === 'WATCHLIST_READY')
+        .map((c) => c.symbol);
+      if (readySymbols.length > 0) {
+        const mergedWl = Array.from(
+          new Set([...(cloudGist.state.trading.watchlist ?? []), ...readySymbols]),
+        );
+        if (mergedWl.length !== (cloudGist.state.trading.watchlist ?? []).length) {
+          cloudGist.state.trading.watchlist = mergedWl;
+          gistDirty = true;
+        }
+      }
+    }
+
+    for (const item of spotOutput.signals) {
+      let sent = false;
+      if (telegramReady && !dryRun) {
+        const res = await sendTelegramHtmlMessage(
+          { botToken, chatId },
+          formatAutoScannerTelegram(item.log),
+        );
+        sent = res.ok;
+        if (res.ok) spotSentCount += 1;
+        console.log(
+          `[Telegram Spot DCA] ${item.log.symbol} (${item.log.scoreOrGrade}): ${res.ok ? 'SENT' : `FAILED (${res.message})`}`,
+        );
+      } else {
+        console.log(
+          `[DryRun/NoTelegram Spot DCA] ${item.log.symbol} | DCA Avg ${formatPrice(item.log.entryPrice)} | TP2 ${formatPrice(item.log.takeProfit ?? 0)} | ${item.log.scoreOrGrade}`,
+        );
+      }
+
+      if (cloudGist) {
+        item.log.telegramSent = sent;
+        cloudGist.state.trading.scannerCooldowns = {
+          ...(cloudGist.state.trading.scannerCooldowns ?? {}),
+          [`SPOT:${item.log.symbol}`]: Date.now(),
+        };
+        cloudGist.state.trading.scannerLogs = [
+          item.log as unknown as Record<string, unknown>,
+          ...(cloudGist.state.trading.scannerLogs ?? []),
+        ].slice(0, 60);
+
+        if (mergedConfig.autoSaveJournal) {
+          cloudGist.state.trading.spotSetups = [
+            item.spotSetup,
+            ...(cloudGist.state.trading.spotSetups ?? []),
+          ];
+          item.log.savedToJournal = true;
+        }
+        gistDirty = true;
+      }
+    }
+  }
+
+  const totalSentCount = futuresSentCount + spotSentCount;
+
   // Optional manual test digest when user runs workflow manually with force_summary=true
-  if (forceSummary && signalsSentCount === 0 && telegramReady && !dryRun) {
+  if (forceSummary && totalSentCount === 0 && telegramReady && !dryRun) {
     const btcPrice = coinsMap.BTCUSDT?.price ?? 0;
-    const topAudits = output.report.audits
-      .slice(0, 5)
-      .map(
-        (a) =>
-          `• <b>${a.baseAsset}</b> (${a.direction}) — Skor ${a.confluenceScore}/100 · Grade ${a.backtestGrade} · ${a.passed ? '✅ LOLOS' : `⛔ ${a.rejectReason ?? 'Belum penuh'}`}`,
-      )
-      .join('\n');
-
-    const digestHtml = [
-      '<b>🛰️ CryptoPulse Cloud Scanner 24/7 — Laporan Test</b>',
+    const digestLines: string[] = [
+      '<b>🛰️ CryptoPulse Cloud Scanner 24/7 — Laporan Test (Futures + Spot)</b>',
       '────────────────────',
-      `BTC Live: <code>${formatPrice(btcPrice)}</code> · HTF (${output.report.htfTimeframe.toUpperCase()}): <b>${output.report.btcHtfTrend}</b>`,
-      `Pair Futures Dipindai: <code>${output.report.universeCount}</code> (Evaluasi mendalam: ${output.report.evaluatedCount})`,
-      `Sinyal Lolos 6-Layer: <code>${output.signals.length}</code> · Alert Terpicu: <code>${alertsTriggeredCount}</code>`,
-      '',
-      '<b>Top 5 Kandidat Audit:</b>',
-      topAudits || '• Tidak ada kandidat lolos filter likuiditas.',
-      '',
-      '<i>Bot 24/7 aktif otomatis tiap 30 menit — hanya mengirim sinyal saat seluruh filter 6-Layer terpenuhi.</i>',
-    ].join('\n');
+      `BTC Live: <code>${formatPrice(btcPrice)}</code> · Mode: <b>${effectiveMode}</b>`,
+    ];
 
-    const res = await sendTelegramHtmlMessage({ botToken, chatId }, digestHtml);
+    if (futuresReport) {
+      const topAudits = futuresReport.audits
+        .slice(0, 4)
+        .map(
+          (a) =>
+            `• <b>${a.baseAsset}</b> (${a.direction}) — Skor ${a.confluenceScore}/100 · Grade ${a.backtestGrade} · ${a.passed ? '✅ LOLOS' : `⛔ ${a.rejectReason ?? 'Belum penuh'}`}`,
+        )
+        .join('\n');
+
+      digestLines.push(
+        '',
+        `<b>⚡ Futures Pro 6-Layer (${futuresReport.htfTimeframe.toUpperCase()} BTC: ${futuresReport.btcHtfTrend})</b>`,
+        `Pair Dipindai: <code>${futuresReport.universeCount}</code> (Evaluasi: ${futuresReport.evaluatedCount}) · Lolos: <code>${futuresSignalsCount}</code>`,
+        topAudits || '• Tidak ada kandidat lolos filter likuiditas.',
+      );
+    }
+
+    if (spotReport) {
+      const topSpot = spotReport.candidates
+        .filter((c) => c.stageReached === 'WATCHLIST_READY')
+        .slice(0, 4)
+        .map(
+          (c) =>
+            `• <b>${c.baseAsset}</b> (${c.tier ?? 'Growth'}) — Skor ${c.finalScore}/100 · RS 7D ${c.rsVsBtc7d >= 0 ? '+' : ''}${c.rsVsBtc7d}% · Float ${Math.round(c.mcapFdvRatio * 100)}%`,
+        )
+        .join('\n');
+
+      digestLines.push(
+        '',
+        '<b>🎯 Spot 100-Coin 4-Stage Funnel</b>',
+        `<code>${spotReport.initialCount}</code> → Outperf <code>${spotReport.afterOutperformance}</code> → Tokenomic <code>${spotReport.afterTokenomics}</code> → Trend <code>${spotReport.afterTrend}</code> → Layak Watchlist <code>${spotReport.watchlistReady}</code>`,
+        topSpot || '• Belum ada koin Spot yang memenuhi seluruh 4 tahap saat ini.',
+      );
+    }
+
+    digestLines.push(
+      '',
+      `Price Alerts Terpicu: <code>${alertsTriggeredCount}</code>`,
+      '<i>Bot 24/7 aktif otomatis tiap 30 menit — memindai Futures Pro 6-Layer & Spot 100-Coin Funnel sekaligus.</i>',
+    );
+
+    const res = await sendTelegramHtmlMessage({ botToken, chatId }, digestLines.join('\n'));
     console.log(`[Telegram Test Digest] ${res.ok ? 'SENT' : `FAILED (${res.message})`}`);
   }
 
@@ -367,26 +519,52 @@ export async function main(): Promise<void> {
 
   // 6) Write GitHub Actions Job Summary
   const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
-  const rows = output.report.audits
-    .map(
-      (a) =>
-        `| **${a.baseAsset}** | ${a.direction} | ${a.confluenceScore}/100 | ${a.backtestGrade} (PF ${a.profitFactor.toFixed(2)}) | ${a.rsi14} | ${a.adx14} | ${a.passed ? '✅ LOLOS' : `⛔ ${a.rejectReason ?? '-'}`} |`,
-    )
-    .join('\n');
+  const summaryParts: string[] = [
+    `## ⚡ CryptoPulse 24/7 Cloud Auto-Scanner Report`,
+    `- **UTC:** \`${new Date().toISOString()}\` (${elapsedSec}s) | **Mode:** \`${effectiveMode}\``,
+    `- **BTC Live:** \`${formatPrice(coinsMap.BTCUSDT?.price ?? 0)}\` | **Price Alerts Triggered:** **${alertsTriggeredCount}**`,
+  ];
 
-  writeStepSummary(
-    [
-      `## ⚡ CryptoPulse 24/7 Cloud Auto-Scanner Report`,
-      `- **UTC:** \`${new Date().toISOString()}\` (${elapsedSec}s)`,
-      `- **BTC Live:** \`${formatPrice(coinsMap.BTCUSDT?.price ?? 0)}\` | **BTC HTF (${output.report.htfTimeframe.toUpperCase()}):** \`${output.report.btcHtfTrend}\``,
-      `- **Universe:** ${output.report.universeCount} Binance Futures Perpetual pairs | **Evaluated:** ${output.report.evaluatedCount}`,
-      `- **Signals Passed:** **${output.signals.length}** (Telegram sent: **${signalsSentCount}**) | **Price Alerts Triggered:** **${alertsTriggeredCount}**`,
+  if (futuresReport) {
+    const futRows = futuresReport.audits
+      .map(
+        (a) =>
+          `| **${a.baseAsset}** | ${a.direction} | ${a.confluenceScore}/100 | ${a.backtestGrade} (PF ${a.profitFactor.toFixed(2)}) | ${a.rsi14} | ${a.adx14} | ${a.passed ? '✅ LOLOS' : `⛔ ${a.rejectReason ?? '-'}`} |`,
+      )
+      .join('\n');
+
+    summaryParts.push(
+      '',
+      `### Futures Pro 6-Layer (BTC HTF ${futuresReport.htfTimeframe.toUpperCase()}: \`${futuresReport.btcHtfTrend}\`)`,
+      `- **Universe:** ${futuresReport.universeCount} Binance Futures Perpetual pairs | **Evaluated:** ${futuresReport.evaluatedCount} | **Passed:** **${futuresSignalsCount}** (Telegram sent: **${futuresSentCount}**)`,
       '',
       '| Coin | Bias | Skor | Backtest | RSI | ADX | Status |',
       '| :--- | :---: | :---: | :---: | :---: | :---: | :--- |',
-      rows,
-    ].join('\n'),
-  );
+      futRows,
+    );
+  }
+
+  if (spotReport) {
+    const spotRows = spotReport.candidates
+      .slice(0, 12)
+      .map(
+        (c) =>
+          `| **${c.baseAsset}** | #${c.marketCapRank} | ${c.rsVsBtc7d >= 0 ? '+' : ''}${c.rsVsBtc7d}% | ${Math.round(c.mcapFdvRatio * 100)}% | ${c.trend1d ?? '-'} / ${c.trend4h ?? '-'} | ${c.finalScore}/100 | ${c.stageReached === 'WATCHLIST_READY' ? `✅ ${c.tier ?? 'Watchlist'}` : `⛔ ${c.rejectReason ?? c.stageReached}`} |`,
+      )
+      .join('\n');
+
+    summaryParts.push(
+      '',
+      `### Spot 100-Coin 4-Stage Accumulation Funnel`,
+      `- **Pipeline:** ${spotReport.initialCount} → Outperformance: **${spotReport.afterOutperformance}** → Tokenomic: **${spotReport.afterTokenomics}** → Trend 1D/4H: **${spotReport.afterTrend}** → Layak Watchlist: **${spotReport.watchlistReady}** | **New Signals:** **${spotSignalsCount}** (Telegram sent: **${spotSentCount}**)`,
+      '',
+      '| Coin | Rank | RS 7D vs BTC | MCap/FDV | 1D / 4H | Skor | Status |',
+      '| :--- | :---: | :---: | :---: | :---: | :---: | :--- |',
+      spotRows,
+    );
+  }
+
+  writeStepSummary(summaryParts.join('\n'));
 }
 
 main().catch((err) => {

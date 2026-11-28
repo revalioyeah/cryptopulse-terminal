@@ -6,8 +6,17 @@ on:
     - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
+      scan_mode:
+        description: 'Mode scan (BOTH = Futures Pro 6-Layer + Spot 100-Coin Funnel sekaligus)'
+        type: choice
+        required: false
+        default: 'BOTH'
+        options:
+          - 'BOTH'
+          - 'FUTURES'
+          - 'SPOT_DCA'
       force_summary:
-        description: 'Kirim ringkasan test ke Telegram meski belum ada sinyal lolos 6-layer'
+        description: 'Kirim ringkasan test ke Telegram meski belum ada sinyal baru lolos filter'
         type: boolean
         required: false
         default: true
@@ -22,7 +31,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 6
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,11 +45,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run 6-Layer Futures Pro & Price Alert Cloud Scanner
+      - name: Run Futures Pro 6-Layer + Spot 100-Coin Funnel & Price Alert Cloud Scanner
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SYNC_GIST_TOKEN: ${{ secrets.SYNC_GIST_TOKEN }}
           SYNC_GIST_ID: ${{ secrets.SYNC_GIST_ID }}
+          SCAN_MODE: ${{ inputs.scan_mode || 'BOTH' }}
           FORCE_SUMMARY: ${{ inputs.force_summary || 'false' }}
         run: npm run scanner:cloud

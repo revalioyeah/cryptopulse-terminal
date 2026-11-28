@@ -43,7 +43,7 @@ interface TradingState extends TradingPersistedData {
 const DEFAULT_SCANNER_CONFIG: AutoSignalConfig = {
   enabled: false,
   intervalSeconds: 180,
-  mode: 'FUTURES',
+  mode: 'BOTH',
   rule: 'HIGH_CONVICTION',
   timeframe: '1h',
   directionFilter: 'BOTH',

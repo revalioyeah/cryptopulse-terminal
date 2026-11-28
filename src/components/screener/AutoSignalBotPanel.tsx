@@ -80,7 +80,10 @@ export function AutoSignalBotPanel() {
   const openSetupForCoin = useAppStore((s) => s.openSetupForCoin);
   const [showAuditList, setShowAuditList] = useState(true);
 
-  const isFutures = scannerConfig.mode === 'FUTURES';
+  const isBoth = scannerConfig.mode === 'BOTH';
+  const showFutures = scannerConfig.mode === 'FUTURES' || isBoth;
+  const showSpot = scannerConfig.mode === 'SPOT_DCA' || isBoth;
+  const isFutures = showFutures;
 
   return (
     <section aria-label="Auto-Signal Scanner Bot" className="cp-card p-4">
@@ -112,9 +115,11 @@ export function AutoSignalBotPanel() {
               </span>
             </div>
             <p className="text-xs text-[#848E9C]">
-              {isFutures
-                ? '6-Layer Anti-Loss Futures (Long & Short): Real Kline TF+HTF · EMA/ADX/MACD/VWAP/RSI Div · S/R Clearance · Backtest Gate.'
-                : 'Spot Funnel 100 Coin: Outperformance vs BTC → Tokenomic MCap/FDV → Trend 1D/4H Real → Layak Watchlist + 3-Layer DCA.'}
+              {isBoth
+                ? 'Dual Engine Aktif: Scan Futures Pro 6-Layer (Long & Short) + Spot Funnel 100 Coin (Outperformance → Tokenomic → Trend 1D/4H) dalam 1 siklus.'
+                : showFutures
+                  ? '6-Layer Anti-Loss Futures (Long & Short): Real Kline TF+HTF · EMA/ADX/MACD/VWAP/RSI Div · S/R Clearance · Backtest Gate.'
+                  : 'Spot Funnel 100 Coin: Outperformance vs BTC → Tokenomic MCap/FDV → Trend 1D/4H Real → Layak Watchlist + 3-Layer DCA.'}
             </p>
           </div>
         </div>
@@ -144,9 +149,11 @@ export function AutoSignalBotPanel() {
             <span>
               {isScanning
                 ? 'Memindai...'
-                : isFutures
-                  ? 'Scan Futures Pro'
-                  : 'Scan Funnel 100 Coin'}
+                : isBoth
+                  ? 'Scan Futures + Spot'
+                  : showFutures
+                    ? 'Scan Futures Pro'
+                    : 'Scan Funnel 100 Coin'}
             </span>
           </button>
         </div>
@@ -179,8 +186,8 @@ export function AutoSignalBotPanel() {
           <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wide text-[#848E9C]">
             Mode Scanner
           </label>
-          <div className="grid grid-cols-2 gap-1.5 rounded-xl border border-[#2B3139] bg-[#0B0E11] p-1">
-            {(['FUTURES', 'SPOT_DCA'] as AutoSignalMode[]).map((m) => {
+          <div className="grid grid-cols-3 gap-1 rounded-xl border border-[#2B3139] bg-[#0B0E11] p-1">
+            {(['BOTH', 'FUTURES', 'SPOT_DCA'] as AutoSignalMode[]).map((m) => {
               const active = scannerConfig.mode === m;
               return (
                 <button
@@ -188,11 +195,11 @@ export function AutoSignalBotPanel() {
                   id={`btn-scanner-mode-${m.toLowerCase()}`}
                   type="button"
                   onClick={() => updateScannerConfig({ mode: m })}
-                  className={`min-h-[36px] rounded-lg px-2 text-xs font-semibold transition ${
+                  className={`min-h-[36px] rounded-lg px-1.5 text-[11px] font-semibold transition ${
                     active ? 'bg-[#F0B90B] text-[#0B0E11]' : 'text-[#848E9C] hover:text-[#EAECEF]'
                   }`}
                 >
-                  {m === 'FUTURES' ? 'Futures L/S' : 'Spot 100 Funnel'}
+                  {m === 'BOTH' ? 'Futures+Spot' : m === 'FUTURES' ? 'Futures' : 'Spot 100'}
                 </button>
               );
             })}
@@ -721,7 +728,7 @@ export function AutoSignalBotPanel() {
         </div>
       )}
 
-      {!isFutures && (
+      {showSpot && (
         <SpotFunnelPanel
           report={lastSpotFunnelReport}
           isScanning={isScanning}

@@ -46,15 +46,31 @@ export async function executeScannerCycle(manual = false): Promise<void> {
       });
     };
 
-    if (config.mode === 'FUTURES') {
+    const runFutures = config.mode === 'FUTURES' || config.mode === 'BOTH';
+    const runSpot = config.mode === 'SPOT_DCA' || config.mode === 'BOTH';
+
+    let futuresSignalsCount = 0;
+    let futuresEvaluated = 0;
+    let spotSignalsCount = 0;
+    let spotWatchlistReady = 0;
+
+    if (runFutures) {
       const { report, signals } = await runFuturesProScan(
         appState.coins,
         appState.coinsMap,
         tradingState.watchlist,
         tradingState.scannerCooldowns,
         config,
-        onProgress,
+        (label, pct) => {
+          onProgress(
+            runSpot ? `[Futures] ${label}` : label,
+            runSpot ? Math.round(pct * 0.5) : pct,
+          );
+        },
       );
+
+      futuresSignalsCount = signals.length;
+      futuresEvaluated = report.evaluatedCount;
 
       for (const item of signals) {
         const { log, setup } = item;
@@ -80,30 +96,34 @@ export async function executeScannerCycle(manual = false): Promise<void> {
         lastScanAt: now,
         lastFuturesReport: report,
       });
+    }
 
-      if (signals.length > 0) {
-        appState.pushToast(
-          `Scanner Pro Futures: ${signals.length} Sinyal Terverifikasi`,
-          `${report.passedCount}/${report.evaluatedCount} kandidat lolos 6-Layer Quality Gate (TF ${config.timeframe.toUpperCase()}).`,
-          'success',
-        );
-      } else if (manual) {
-        appState.pushToast(
-          'Scan Selesai — 0 Sinyal Lolos Filter Ketat',
-          `Diperiksa ${report.evaluatedCount} koin di TF ${config.timeframe.toUpperCase()}. Semua ditolak Quality Gate untuk mencegah entry berisiko.`,
-          'info',
-        );
+    if (runSpot) {
+      // Build dedicated Spot cooldown map so Futures cooldowns never block Spot DCA signals
+      const rawCooldowns = useTradingStore.getState().scannerCooldowns;
+      const spotCooldowns: Record<string, number> = {};
+      for (const [k, ts] of Object.entries(rawCooldowns)) {
+        if (k.startsWith('SPOT:')) {
+          spotCooldowns[k.slice(5)] = ts;
+        }
       }
-    } else {
-      // SPOT_DCA mode: 100-Coin 4-Stage Institutional Funnel
+
       const { report, signals } = await runSpot100FunnelScan(
         appState.coins,
         appState.coinsMap,
-        tradingState.scannerCooldowns,
+        spotCooldowns,
         config,
         manual,
-        onProgress,
+        (label, pct) => {
+          onProgress(
+            runFutures ? `[Spot 100] ${label}` : label,
+            runFutures ? 50 + Math.round(pct * 0.5) : pct,
+          );
+        },
       );
+
+      spotSignalsCount = signals.length;
+      spotWatchlistReady = report.watchlistReady;
 
       if (config.autoAddWatchlist) {
         const readySymbols = report.candidates
@@ -130,7 +150,7 @@ export async function executeScannerCycle(manual = false): Promise<void> {
             appState.pushToast('Auto-Kirim Telegram Gagal', res.message, 'error');
           }
         }
-        useTradingStore.getState().setSymbolCooldown(log.symbol, now);
+        useTradingStore.getState().setSymbolCooldown(`SPOT:${log.symbol}`, now);
         useTradingStore.getState().addScannerLog(log);
       }
 
@@ -138,14 +158,36 @@ export async function executeScannerCycle(manual = false): Promise<void> {
         lastScanAt: now,
         lastSpotFunnelReport: report,
       });
+    }
 
-      if (manual || report.watchlistReady > 0) {
+    if (runFutures && runSpot) {
+      if (manual || futuresSignalsCount > 0 || spotSignalsCount > 0) {
         appState.pushToast(
-          `Spot Funnel 100 Coin: ${report.watchlistReady} Layak Watchlist`,
-          `Saringan: ${report.initialCount} → Outperf ${report.afterOutperformance} → Tokenomic ${report.afterTokenomics} → Trend ${report.afterTrend} → ${report.watchlistReady} Watchlist.`,
-          report.watchlistReady > 0 ? 'success' : 'info',
+          `Scan Futures + Spot Selesai`,
+          `Futures: ${futuresSignalsCount}/${futuresEvaluated} lolos 6-Layer · Spot 100 Funnel: ${spotWatchlistReady} layak Watchlist (${spotSignalsCount} sinyal baru).`,
+          futuresSignalsCount > 0 || spotSignalsCount > 0 ? 'success' : 'info',
         );
       }
+    } else if (runFutures) {
+      if (futuresSignalsCount > 0) {
+        appState.pushToast(
+          `Scanner Pro Futures: ${futuresSignalsCount} Sinyal Terverifikasi`,
+          `${futuresSignalsCount}/${futuresEvaluated} kandidat lolos 6-Layer Quality Gate (TF ${config.timeframe.toUpperCase()}).`,
+          'success',
+        );
+      } else if (manual) {
+        appState.pushToast(
+          'Scan Selesai — 0 Sinyal Lolos Filter Ketat',
+          `Diperiksa ${futuresEvaluated} koin di TF ${config.timeframe.toUpperCase()}. Semua ditolak Quality Gate untuk mencegah entry berisiko.`,
+          'info',
+        );
+      }
+    } else if (runSpot && (manual || spotWatchlistReady > 0)) {
+      appState.pushToast(
+        `Spot Funnel 100 Coin: ${spotWatchlistReady} Layak Watchlist`,
+        `${spotWatchlistReady} koin lolos 4 tahap (Outperformance → Tokenomic → Trend 1D/4H → Watchlist).`,
+        spotWatchlistReady > 0 ? 'success' : 'info',
+      );
     }
   } finally {
     scanInFlight = false;
